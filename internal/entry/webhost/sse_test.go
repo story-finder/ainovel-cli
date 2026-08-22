@@ -144,20 +144,54 @@ func readSSEFrames(reader *io.PipeReader, results chan<- sseResult) {
 	}
 }
 
-func waitForFrame(t *testing.T, hub *eventHub) frame {
+func waitForFrame(t *testing.T, hub *eventHub, events ...string) frame {
 	t.Helper()
 	sub := hub.subscribe(0)
 	defer sub.Cancel()
 
-	select {
-	case next, ok := <-sub.Frames:
-		if !ok {
-			t.Fatal("event hub subscription closed while waiting for frame")
+	matches := func(next frame) bool {
+		if len(events) == 0 {
+			return true
 		}
-		return next
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for hub frame")
-		return frame{}
+		for _, event := range events {
+			if next.Event == event {
+				return true
+			}
+		}
+		return false
+	}
+	for index := len(sub.Replay) - 1; index >= 0; index-- {
+		if matches(sub.Replay[index]) {
+			return sub.Replay[index]
+		}
+	}
+
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case next, ok := <-sub.Frames:
+			if !ok {
+				t.Fatal("event hub subscription closed while waiting for frame")
+				return frame{}
+			}
+			if matches(next) {
+				return next
+			}
+		case <-timer.C:
+			t.Fatal("timed out waiting for hub frame")
+			return frame{}
+		}
+	}
+}
+
+func TestWaitForFrameConsumesRetainedReplay(t *testing.T) {
+	hub := newEventHub(8)
+	want := hub.publish("host_event", "retained")
+
+	got := waitForFrame(t, hub)
+	if got.ID != want.ID {
+		t.Fatalf("frame ID = %d, want %d", got.ID, want.ID)
 	}
 }
 
@@ -200,13 +234,17 @@ func TestSSELastEventIDReplaysCurrentProcessFrames(t *testing.T) {
 	app, server := newSSETestServer(t, rt, 8)
 
 	rt.events <- host.Event{Category: "SYSTEM", Summary: "host event"}
-	first := waitForFrame(t, app.hub)
+	first := waitForFrame(t, app.hub, "host_event")
 	rt.stream <- "next delta"
+	stream := waitForFrame(t, app.hub, "stream_delta")
 
 	client := openSSE(t, server.Config.Handler, strconv.FormatInt(first.ID, 10))
 	got := client.Next(t)
 	if got.Event != "stream_delta" {
 		t.Fatalf("event = %q, want stream_delta", got.Event)
+	}
+	if got.ID != stream.ID {
+		t.Fatalf("replayed frame ID = %d, want %d", got.ID, stream.ID)
 	}
 }
 
@@ -215,11 +253,11 @@ func TestSSEStaleLastEventIDEmitsReset(t *testing.T) {
 	app, server := newSSETestServer(t, rt, 1)
 
 	rt.events <- host.Event{Category: "SYSTEM", Summary: "one"}
-	first := waitForFrame(t, app.hub)
+	first := waitForFrame(t, app.hub, "host_event")
 	rt.events <- host.Event{Category: "SYSTEM", Summary: "two"}
-	_ = waitForFrame(t, app.hub)
+	_ = waitForFrame(t, app.hub, "host_event")
 	rt.events <- host.Event{Category: "SYSTEM", Summary: "three"}
-	_ = waitForFrame(t, app.hub)
+	_ = waitForFrame(t, app.hub, "host_event")
 
 	client := openSSE(t, server.Config.Handler, strconv.FormatInt(first.ID, 10))
 	got := client.Next(t)
