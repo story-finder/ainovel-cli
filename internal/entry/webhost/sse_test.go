@@ -145,11 +145,22 @@ func readSSEFrames(reader *io.PipeReader, results chan<- sseResult) {
 }
 
 func waitForFrame(t *testing.T, hub *eventHub, events ...string) frame {
+	return waitForFrameAfter(t, hub, 0, events...)
+}
+
+func waitForFrameAfter(t *testing.T, hub *eventHub, afterID int64, events ...string) frame {
 	t.Helper()
-	sub := hub.subscribe(0)
+	sub := hub.subscribe(afterID)
 	defer sub.Cancel()
+	if sub.Reset {
+		t.Fatalf("event hub replay reset after frame ID %d", afterID)
+		return frame{}
+	}
 
 	matches := func(next frame) bool {
+		if next.ID <= afterID {
+			return false
+		}
 		if len(events) == 0 {
 			return true
 		}
@@ -195,6 +206,17 @@ func TestWaitForFrameConsumesRetainedReplay(t *testing.T) {
 	}
 }
 
+func TestWaitForFrameAfterSkipsEarlierRetainedFrames(t *testing.T) {
+	hub := newEventHub(8)
+	first := hub.publish("host_event", "one")
+	second := hub.publish("host_event", "two")
+
+	got := waitForFrameAfter(t, hub, first.ID, "host_event")
+	if got.ID != second.ID {
+		t.Fatalf("frame ID = %d, want %d", got.ID, second.ID)
+	}
+}
+
 func newSSETestServer(t *testing.T, rt *fakeRuntime, replayLimit int) (*server, *httptest.Server) {
 	t.Helper()
 	app := newServer(rt, replayLimit)
@@ -236,7 +258,7 @@ func TestSSELastEventIDReplaysCurrentProcessFrames(t *testing.T) {
 	rt.events <- host.Event{Category: "SYSTEM", Summary: "host event"}
 	first := waitForFrame(t, app.hub, "host_event")
 	rt.stream <- "next delta"
-	stream := waitForFrame(t, app.hub, "stream_delta")
+	stream := waitForFrameAfter(t, app.hub, first.ID, "stream_delta")
 
 	client := openSSE(t, server.Config.Handler, strconv.FormatInt(first.ID, 10))
 	got := client.Next(t)
@@ -255,9 +277,9 @@ func TestSSEStaleLastEventIDEmitsReset(t *testing.T) {
 	rt.events <- host.Event{Category: "SYSTEM", Summary: "one"}
 	first := waitForFrame(t, app.hub, "host_event")
 	rt.events <- host.Event{Category: "SYSTEM", Summary: "two"}
-	_ = waitForFrame(t, app.hub, "host_event")
+	second := waitForFrameAfter(t, app.hub, first.ID, "host_event")
 	rt.events <- host.Event{Category: "SYSTEM", Summary: "three"}
-	_ = waitForFrame(t, app.hub, "host_event")
+	_ = waitForFrameAfter(t, app.hub, second.ID, "host_event")
 
 	client := openSSE(t, server.Config.Handler, strconv.FormatInt(first.ID, 10))
 	got := client.Next(t)
