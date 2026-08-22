@@ -12,10 +12,11 @@ type frame struct {
 }
 
 type subscription struct {
-	Replay []frame
-	Reset  bool
-	Frames <-chan frame
-	Cancel func()
+	Replay  []frame
+	Reset   bool
+	ResetID int64
+	Frames  <-chan frame
+	Cancel  func()
 }
 
 type eventHub struct {
@@ -24,6 +25,11 @@ type eventHub struct {
 	nextID  int64
 	history []frame
 	clients map[chan frame]struct{}
+}
+
+func (h *eventHub) nextIDLocked() int64 {
+	h.nextID++
+	return h.nextID
 }
 
 func newEventHub(limit int) *eventHub {
@@ -39,8 +45,7 @@ func (h *eventHub) publish(event string, value any) frame {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	h.nextID++
-	f := frame{ID: h.nextID, Event: event, Data: data}
+	f := frame{ID: h.nextIDLocked(), Event: event, Data: data}
 	h.history = append(h.history, f)
 	if len(h.history) > h.limit {
 		h.history = h.history[len(h.history)-h.limit:]
@@ -82,6 +87,7 @@ func (h *eventHub) subscribe(after int64) subscription {
 		oldest := h.history[0].ID
 		if after > 0 && after < oldest-1 {
 			sub.Reset = true
+			sub.ResetID = h.nextIDLocked()
 		} else {
 			for _, f := range h.history {
 				if f.ID > after {

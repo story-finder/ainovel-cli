@@ -32,9 +32,7 @@ func (s *server) Close() {
 
 func (s *server) pump(ctx context.Context) {
 	items, err := s.rt.ReplayQueue(0)
-	if err != nil {
-		s.hub.publish("runtime_error", map[string]string{"error": err.Error()})
-	} else {
+	if err == nil {
 		for _, item := range items {
 			s.hub.publish("runtime_replay", item)
 		}
@@ -100,7 +98,7 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if subscription.Reset {
-		if err := writeSSEFrame(w, flusher, frame{Event: "reset", Data: json.RawMessage(`{}`)}); err != nil {
+		if err := writeSSEFrame(w, flusher, frame{ID: subscription.ResetID, Event: "reset", Data: json.RawMessage(`{}`)}); err != nil {
 			return
 		}
 	} else {
@@ -133,7 +131,7 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 func lastEventID(r *http.Request) int64 {
 	raw := strings.TrimSpace(r.Header.Get("Last-Event-ID"))
 	if raw == "" {
-		for _, key := range []string{"lastEventID", "last-event-id", "last_event_id"} {
+		for _, key := range []string{"lastEventId", "lastEventID", "last-event-id", "last_event_id"} {
 			raw = strings.TrimSpace(r.URL.Query().Get(key))
 			if raw != "" {
 				break

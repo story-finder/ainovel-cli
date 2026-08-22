@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -58,10 +59,18 @@ func (w *pipeResponseWriter) Write(data []byte) (int, error) {
 func (w *pipeResponseWriter) Flush() {}
 
 func openSSE(t *testing.T, handler http.Handler, lastEventID string) *sseClient {
+	return openSSERequest(t, handler, "http://example.test/events", lastEventID)
+}
+
+func openSSEQuery(t *testing.T, handler http.Handler, query, lastEventID string) *sseClient {
+	return openSSERequest(t, handler, "http://example.test/events?"+query, lastEventID)
+}
+
+func openSSERequest(t *testing.T, handler http.Handler, target, lastEventID string) *sseClient {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	request := httptest.NewRequest(http.MethodGet, "http://example.test/events", nil).WithContext(ctx)
+	request := httptest.NewRequest(http.MethodGet, target, nil).WithContext(ctx)
 	if lastEventID != "" {
 		request.Header.Set("Last-Event-ID", lastEventID)
 	}
@@ -214,6 +223,133 @@ func TestWaitForFrameAfterSkipsEarlierRetainedFrames(t *testing.T) {
 	got := waitForFrameAfter(t, hub, first.ID, "host_event")
 	if got.ID != second.ID {
 		t.Fatalf("frame ID = %d, want %d", got.ID, second.ID)
+	}
+}
+
+func TestHubResetReservesIDWithoutBroadcasting(t *testing.T) {
+	hub := newEventHub(1)
+	first := hub.publish("host_event", "one")
+	hub.publish("host_event", "two")
+	hub.publish("host_event", "three")
+
+	stale := hub.subscribe(first.ID)
+	defer stale.Cancel()
+	if !stale.Reset {
+		t.Fatal("stale subscription did not request reset")
+	}
+
+	other := hub.subscribe(0)
+	defer other.Cancel()
+	live := hub.publish("host_event", "live")
+	if live.ID <= stale.ResetID {
+		t.Fatalf("live ID = %d, want > reserved reset ID %d", live.ID, stale.ResetID)
+	}
+
+	select {
+	case got, ok := <-other.Frames:
+		if !ok || got.ID != live.ID {
+			t.Fatalf("unrelated subscriber frame = (%+v, %t), want live frame ID %d", got, ok, live.ID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for live frame")
+	}
+}
+
+func TestLastEventIDUsesQueryWhenHeaderIsMissing(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "http://example.test/events?lastEventId=7", nil)
+
+	if got := lastEventID(request); got != 7 {
+		t.Fatalf("query Last-Event-ID = %d, want 7", got)
+	}
+}
+
+func TestLastEventIDHeaderTakesPrecedenceOverQuery(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "http://example.test/events?lastEventId=7", nil)
+	request.Header.Set("Last-Event-ID", "3")
+
+	if got := lastEventID(request); got != 3 {
+		t.Fatalf("header Last-Event-ID = %d, want 3", got)
+	}
+}
+
+func TestSSEQueryLastEventIDReplaysCurrentProcessFrame(t *testing.T) {
+	rt := newFakeRuntime()
+	app := newServer(rt, 8)
+	t.Cleanup(app.Close)
+
+	rt.events <- host.Event{Category: "SYSTEM", Summary: "host event"}
+	first := waitForFrame(t, app.hub, "host_event")
+	rt.stream <- "next delta"
+	stream := waitForFrameAfter(t, app.hub, first.ID, "stream_delta")
+
+	client := openSSEQuery(t, app.Handler(), "lastEventId="+strconv.FormatInt(first.ID, 10), "")
+	got := client.Next(t)
+	if got.Event != "stream_delta" || got.ID != stream.ID {
+		t.Fatalf("query replay frame = (%s, %d), want (stream_delta, %d)", got.Event, got.ID, stream.ID)
+	}
+}
+
+func TestSSEHeaderLastEventIDTakesPrecedenceOverQueryReplay(t *testing.T) {
+	rt := newFakeRuntime()
+	app := newServer(rt, 8)
+	t.Cleanup(app.Close)
+
+	rt.events <- host.Event{Category: "SYSTEM", Summary: "first"}
+	first := waitForFrame(t, app.hub, "host_event")
+	rt.stream <- "stream"
+	stream := waitForFrameAfter(t, app.hub, first.ID, "stream_delta")
+	rt.events <- host.Event{Category: "SYSTEM", Summary: "after stream"}
+	third := waitForFrameAfter(t, app.hub, stream.ID, "host_event")
+
+	client := openSSEQuery(t, app.Handler(), "lastEventId="+strconv.FormatInt(first.ID, 10), strconv.FormatInt(stream.ID, 10))
+	got := client.Next(t)
+	if got.Event != "host_event" || got.ID != third.ID {
+		t.Fatalf("header-precedence frame = (%s, %d), want (host_event, %d)", got.Event, got.ID, third.ID)
+	}
+}
+
+func TestSSEResetCarriesIncreasingID(t *testing.T) {
+	rt := newFakeRuntime()
+	app := newServer(rt, 1)
+	t.Cleanup(app.Close)
+
+	rt.events <- host.Event{Category: "SYSTEM", Summary: "one"}
+	first := waitForFrame(t, app.hub, "host_event")
+	rt.events <- host.Event{Category: "SYSTEM", Summary: "two"}
+	second := waitForFrameAfter(t, app.hub, first.ID, "host_event")
+	rt.events <- host.Event{Category: "SYSTEM", Summary: "three"}
+	_ = waitForFrameAfter(t, app.hub, second.ID, "host_event")
+
+	client := openSSE(t, app.Handler(), strconv.FormatInt(first.ID, 10))
+	got := client.Next(t)
+	if got.Event != "reset" {
+		t.Fatalf("event = %q, want reset", got.Event)
+	}
+	if got.ID <= first.ID {
+		t.Fatalf("reset ID = %d, want > stale client ID %d", got.ID, first.ID)
+	}
+	live := app.hub.publish("host_event", host.Event{Category: "SYSTEM", Summary: "after reset"})
+	if live.ID <= got.ID {
+		t.Fatalf("live ID = %d, want > reset ID %d", live.ID, got.ID)
+	}
+}
+
+func TestEventPumpDoesNotPublishReplayQueueErrors(t *testing.T) {
+	rt := newFakeRuntime()
+	rt.replayErr = errors.New("replay failed")
+	app := newServer(rt, 8)
+	t.Cleanup(app.Close)
+
+	rt.events <- host.Event{Category: "SYSTEM", Summary: "host event"}
+	_ = waitForFrame(t, app.hub, "host_event")
+
+	app.hub.mu.Lock()
+	history := append([]frame(nil), app.hub.history...)
+	app.hub.mu.Unlock()
+	for _, next := range history {
+		if next.Event == "runtime_error" {
+			t.Fatalf("unexpected runtime_error frame: %+v", next)
+		}
 	}
 }
 
