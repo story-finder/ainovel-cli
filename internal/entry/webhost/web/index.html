@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Novel</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="page-header">
+      <p class="eyebrow">AI Novel host</p>
+      <h1>Write the next chapter</h1>
+      <p class="lede">Control the local host and watch its live output.</p>
+    </header>
+
+    <section id="status" class="status-card" aria-live="polite">
+      <h2>Status</h2>
+      <p id="status-text">Loading status…</p>
+    </section>
+
+    <section class="controls" aria-label="Host controls">
+      <form id="start-form" class="control-card">
+        <h2>Start</h2>
+        <label for="start-text">Story prompt</label>
+        <textarea id="start-text" name="text" rows="4" placeholder="Describe the story you want to write."></textarea>
+        <button type="submit">Start story</button>
+      </form>
+
+      <form id="steer-form" class="control-card">
+        <h2>Steer</h2>
+        <label for="steer-text">Direction</label>
+        <textarea id="steer-text" name="text" rows="4" placeholder="Change the direction of the current run."></textarea>
+        <button type="submit">Send direction</button>
+      </form>
+
+      <form id="continue-form" class="control-card">
+        <h2>Continue</h2>
+        <label for="continue-text">Continuation</label>
+        <textarea id="continue-text" name="text" rows="4" placeholder="Tell the host how to continue."></textarea>
+        <button type="submit">Continue</button>
+      </form>
+
+      <div class="control-card action-card">
+        <h2>Session</h2>
+        <p>Pause the current run or reconnect the live event stream.</p>
+        <div class="button-row">
+          <button id="pause-button" type="button" class="secondary">Pause</button>
+          <button id="reconnect-button" type="button" class="secondary">Reconnect</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="question" class="question-card" hidden aria-live="polite">
+      <h2>Host question</h2>
+      <form id="question-form">
+        <div id="question-items"></div>
+        <p id="question-error" class="error" role="alert"></p>
+        <button type="submit">Send answers</button>
+      </form>
+    </section>
+
+    <section class="output-card">
+      <div class="section-heading">
+        <h2>Output</h2>
+        <p id="server-error" class="error" role="alert"></p>
+      </div>
+      <pre id="stream" aria-live="polite"></pre>
+    </section>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>
