@@ -131,12 +131,7 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 func lastEventID(r *http.Request) int64 {
 	raw := strings.TrimSpace(r.Header.Get("Last-Event-ID"))
 	if raw == "" {
-		for _, key := range []string{"lastEventId", "lastEventID", "last-event-id", "last_event_id"} {
-			raw = strings.TrimSpace(r.URL.Query().Get(key))
-			if raw != "" {
-				break
-			}
-		}
+		raw = strings.TrimSpace(r.URL.Query().Get("after"))
 	}
 	if raw == "" {
 		return 0

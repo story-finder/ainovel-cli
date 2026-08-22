@@ -255,8 +255,38 @@ func TestHubResetReservesIDWithoutBroadcasting(t *testing.T) {
 	}
 }
 
+func TestHubReservedResetIDsDoNotCauseFalseReset(t *testing.T) {
+	hub := newEventHub(1)
+	first := hub.publish("host_event", "one")
+	hub.publish("host_event", "two")
+	hub.publish("host_event", "three")
+
+	firstStale := hub.subscribe(first.ID)
+	if !firstStale.Reset {
+		t.Fatal("first stale subscription did not request reset")
+	}
+	firstResetID := firstStale.ResetID
+	firstStale.Cancel()
+
+	secondStale := hub.subscribe(first.ID)
+	if !secondStale.Reset {
+		t.Fatal("second stale subscription did not request reset")
+	}
+	secondStale.Cancel()
+
+	live := hub.publish("host_event", "four")
+	sub := hub.subscribe(firstResetID)
+	defer sub.Cancel()
+	if sub.Reset {
+		t.Fatalf("subscription after private reset ID %d unexpectedly requested reset", firstResetID)
+	}
+	if len(sub.Replay) != 1 || sub.Replay[0].ID != live.ID {
+		t.Fatalf("replay = %+v, want retained live frame ID %d", sub.Replay, live.ID)
+	}
+}
+
 func TestLastEventIDUsesQueryWhenHeaderIsMissing(t *testing.T) {
-	request := httptest.NewRequest(http.MethodGet, "http://example.test/events?lastEventId=7", nil)
+	request := httptest.NewRequest(http.MethodGet, "http://example.test/events?after=7", nil)
 
 	if got := lastEventID(request); got != 7 {
 		t.Fatalf("query Last-Event-ID = %d, want 7", got)
@@ -264,7 +294,7 @@ func TestLastEventIDUsesQueryWhenHeaderIsMissing(t *testing.T) {
 }
 
 func TestLastEventIDHeaderTakesPrecedenceOverQuery(t *testing.T) {
-	request := httptest.NewRequest(http.MethodGet, "http://example.test/events?lastEventId=7", nil)
+	request := httptest.NewRequest(http.MethodGet, "http://example.test/events?after=7", nil)
 	request.Header.Set("Last-Event-ID", "3")
 
 	if got := lastEventID(request); got != 3 {
@@ -282,7 +312,7 @@ func TestSSEQueryLastEventIDReplaysCurrentProcessFrame(t *testing.T) {
 	rt.stream <- "next delta"
 	stream := waitForFrameAfter(t, app.hub, first.ID, "stream_delta")
 
-	client := openSSEQuery(t, app.Handler(), "lastEventId="+strconv.FormatInt(first.ID, 10), "")
+	client := openSSEQuery(t, app.Handler(), "after="+strconv.FormatInt(first.ID, 10), "")
 	got := client.Next(t)
 	if got.Event != "stream_delta" || got.ID != stream.ID {
 		t.Fatalf("query replay frame = (%s, %d), want (stream_delta, %d)", got.Event, got.ID, stream.ID)
@@ -301,7 +331,7 @@ func TestSSEHeaderLastEventIDTakesPrecedenceOverQueryReplay(t *testing.T) {
 	rt.events <- host.Event{Category: "SYSTEM", Summary: "after stream"}
 	third := waitForFrameAfter(t, app.hub, stream.ID, "host_event")
 
-	client := openSSEQuery(t, app.Handler(), "lastEventId="+strconv.FormatInt(first.ID, 10), strconv.FormatInt(stream.ID, 10))
+	client := openSSEQuery(t, app.Handler(), "after="+strconv.FormatInt(first.ID, 10), strconv.FormatInt(stream.ID, 10))
 	got := client.Next(t)
 	if got.Event != "host_event" || got.ID != third.ID {
 		t.Fatalf("header-precedence frame = (%s, %d), want (host_event, %d)", got.Event, got.ID, third.ID)

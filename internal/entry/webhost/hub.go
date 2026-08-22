@@ -20,11 +20,12 @@ type subscription struct {
 }
 
 type eventHub struct {
-	mu      sync.Mutex
-	limit   int
-	nextID  int64
-	history []frame
-	clients map[chan frame]struct{}
+	mu            sync.Mutex
+	limit         int
+	nextID        int64
+	history       []frame
+	lastDroppedID int64
+	clients       map[chan frame]struct{}
 }
 
 func (h *eventHub) nextIDLocked() int64 {
@@ -48,7 +49,9 @@ func (h *eventHub) publish(event string, value any) frame {
 	f := frame{ID: h.nextIDLocked(), Event: event, Data: data}
 	h.history = append(h.history, f)
 	if len(h.history) > h.limit {
-		h.history = h.history[len(h.history)-h.limit:]
+		dropCount := len(h.history) - h.limit
+		h.lastDroppedID = h.history[dropCount-1].ID
+		h.history = h.history[dropCount:]
 	}
 
 	for client := range h.clients {
@@ -84,8 +87,7 @@ func (h *eventHub) subscribe(after int64) subscription {
 	if after == 0 {
 		sub.Replay = append([]frame(nil), h.history...)
 	} else if len(h.history) > 0 {
-		oldest := h.history[0].ID
-		if after > 0 && after < oldest-1 {
+		if after > 0 && after < h.lastDroppedID {
 			sub.Reset = true
 			sub.ResetID = h.nextIDLocked()
 		} else {
