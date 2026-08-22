@@ -46,15 +46,61 @@ func TestStaticAssetsUseRootRelativeRoutes(t *testing.T) {
 }
 
 func TestStaticAssetsUseOnlyRelativeLocalPaths(t *testing.T) {
-	app, err := webFS.ReadFile("web/app.js")
-	if err != nil {
-		t.Fatalf("read embedded web/app.js: %v", err)
-	}
-
-	content := string(app)
+	content := embeddedAppJS(t)
 	for _, forbidden := range []string{"http://", "https://"} {
 		if strings.Contains(content, forbidden) {
 			t.Fatalf("web/app.js contains forbidden external path %q", forbidden)
 		}
 	}
+}
+
+func TestAppHydratesPendingQuestionsFromStatus(t *testing.T) {
+	content := embeddedAppJS(t)
+	for _, want := range []string{
+		`const pending = field(payload, "pending", "Pending");`,
+		`if (pending && requestRevision === questionRevision) {`,
+		`renderQuestionFrame(pending);`,
+		`clearQuestionFrame();`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("web/app.js does not contain pending-question hydration assertion %q", want)
+		}
+	}
+}
+
+func TestAppReconnectsFromLatestEventCursor(t *testing.T) {
+	content := embeddedAppJS(t)
+	for _, want := range []string{
+		`let lastEventID = null;`,
+		`event.lastEventId`,
+		`/events?after=`,
+		`eventSource.addEventListener("heartbeat", rememberEventID);`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("web/app.js does not contain reconnect cursor assertion %q", want)
+		}
+	}
+}
+
+func TestAppMakesCustomAnswersExclusiveForSingleSelect(t *testing.T) {
+	content := embeddedAppJS(t)
+	for _, want := range []string{
+		`if (multiSelect) {`,
+		`selected.push(customText);`,
+		`selected = [customText];`,
+		`notes[questionText] = customText;`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("web/app.js does not contain single-select custom answer assertion %q", want)
+		}
+	}
+}
+
+func embeddedAppJS(t *testing.T) string {
+	t.Helper()
+	app, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatalf("read embedded web/app.js: %v", err)
+	}
+	return string(app)
 }

@@ -3,6 +3,8 @@
 
   let eventSource = null;
   let pendingQuestion = null;
+  let lastEventID = null;
+  let questionRevision = 0;
 
   const field = (value, lower, upper) => {
     if (!value || typeof value !== "object") {
@@ -12,6 +14,17 @@
   };
 
   const elements = {};
+
+  function rememberEventID(event) {
+    const rawID = event && event.lastEventId;
+    if (!rawID || !/^\d+$/.test(rawID)) {
+      return;
+    }
+    const eventID = Number(rawID);
+    if (Number.isSafeInteger(eventID)) {
+      lastEventID = eventID;
+    }
+  }
 
   function setServerError(message) {
     elements.serverError.textContent = message ? String(message) : "";
@@ -52,15 +65,48 @@
     return parts.filter((part) => part !== undefined && part !== null && String(part).trim()).map(String).join(" · ") || "Connected";
   }
 
-  function renderStatus(payload) {
+  function clearQuestionFrame() {
+    pendingQuestion = null;
+    elements.questionItems.replaceChildren();
+    setQuestionError("");
+    elements.question.hidden = true;
+  }
+
+  function renderQuestionFrame(frame) {
+    const id = field(frame, "id", "ID");
+    const questions = field(frame, "questions", "Questions");
+    if (typeof id !== "string" || !Array.isArray(questions)) {
+      const message = "The server sent an invalid question.";
+      clearQuestionFrame();
+      setQuestionError(message);
+      setServerError(message);
+      return false;
+    }
+
+    pendingQuestion = { id, questions };
+    renderQuestions(questions);
+    setQuestionError("");
+    elements.question.hidden = false;
+    return true;
+  }
+
+  function renderStatus(payload, requestRevision = questionRevision) {
     const snapshot = field(payload, "host", "Host") || payload;
     elements.statusText.textContent = snapshotText(snapshot);
+
+    const pending = field(payload, "pending", "Pending");
+    if (pending && requestRevision === questionRevision) {
+      renderQuestionFrame(pending);
+    } else if (requestRevision === questionRevision) {
+      clearQuestionFrame();
+    }
   }
 
   async function refreshStatus() {
+    const requestRevision = questionRevision;
     try {
       const payload = await requestJSON("/status");
-      renderStatus(payload);
+      renderStatus(payload, requestRevision);
     } catch (error) {
       setServerError(error.message || "Could not load host status.");
     }
@@ -98,6 +144,7 @@
   }
 
   function handleQuestion(event) {
+    rememberEventID(event);
     let frame;
     try {
       frame = parseEvent(event);
@@ -107,19 +154,9 @@
       return;
     }
 
-    const id = field(frame, "id", "ID");
-    const questions = field(frame, "questions", "Questions");
-    if (typeof id !== "string" || !Array.isArray(questions)) {
-      const message = "The server sent an invalid question.";
-      setQuestionError(message);
-      setServerError(message);
-      return;
+    if (renderQuestionFrame(frame)) {
+      questionRevision += 1;
     }
-
-    pendingQuestion = { id, questions };
-    renderQuestions(questions);
-    setQuestionError("");
-    elements.question.hidden = false;
   }
 
   function renderQuestions(questions) {
@@ -177,13 +214,18 @@
     let invalid = false;
     pendingQuestion.questions.forEach((question, questionIndex) => {
       const questionText = field(question, "question", "Question") || `Question ${questionIndex + 1}`;
+      const multiSelect = Boolean(field(question, "multiSelect", "MultiSelect"));
       const inputs = Array.from(elements.questionItems.querySelectorAll(`input[data-question-index="${questionIndex}"]`));
-      const selected = inputs.filter((input) => input.type === "radio" || input.type === "checkbox").filter((input) => input.checked).map((input) => input.value).filter(Boolean);
+      let selected = inputs.filter((input) => input.type === "radio" || input.type === "checkbox").filter((input) => input.checked).map((input) => input.value).filter(Boolean);
       const custom = inputs.find((input) => input.type === "text");
       const customText = custom ? custom.value.trim() : "";
       if (customText) {
-        selected.push(customText);
         notes[questionText] = customText;
+        if (multiSelect) {
+          selected.push(customText);
+        } else {
+          selected = [customText];
+        }
       }
       if (selected.length === 0) {
         invalid = true;
@@ -204,8 +246,8 @@
         body: JSON.stringify({ answers, notes })
       });
       pendingQuestion = null;
-      elements.question.hidden = true;
-      setQuestionError("");
+      questionRevision += 1;
+      clearQuestionFrame();
       setServerError("");
       await refreshStatus();
     } catch (error) {
@@ -218,9 +260,11 @@
     if (eventSource) {
       eventSource.close();
     }
-    eventSource = new EventSource("/events");
+    const eventsURL = lastEventID === null ? "/events" : `/events?after=${encodeURIComponent(lastEventID)}`;
+    eventSource = new EventSource(eventsURL);
     eventSource.addEventListener("open", () => setServerError(""));
     eventSource.addEventListener("stream_delta", (event) => {
+      rememberEventID(event);
       try {
         const payload = parseEvent(event);
         const text = field(payload, "text", "Text");
@@ -231,10 +275,12 @@
         setServerError(error.message);
       }
     });
-    eventSource.addEventListener("stream_clear", () => {
+    eventSource.addEventListener("stream_clear", (event) => {
+      rememberEventID(event);
       elements.stream.textContent = "";
     });
     eventSource.addEventListener("host_event", (event) => {
+      rememberEventID(event);
       try {
         updateStatusFromEvent(parseEvent(event));
       } catch (error) {
@@ -242,6 +288,7 @@
       }
     });
     eventSource.addEventListener("terminal", (event) => {
+      rememberEventID(event);
       try {
         updateStatusFromEvent(parseEvent(event));
       } catch (error) {
@@ -249,9 +296,11 @@
       }
     });
     eventSource.addEventListener("question", handleQuestion);
-    eventSource.addEventListener("reset", () => {
+    eventSource.addEventListener("reset", (event) => {
+      rememberEventID(event);
       void refreshStatus();
     });
+    eventSource.addEventListener("heartbeat", rememberEventID);
     eventSource.addEventListener("error", () => {
       setServerError("The live event stream is disconnected; retrying…");
     });
