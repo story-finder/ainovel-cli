@@ -5,6 +5,7 @@
   let pendingQuestion = null;
   let lastEventID = null;
   let questionRevision = 0;
+  let latestStatusRequestID = 0;
 
   const field = (value, lower, upper) => {
     if (!value || typeof value !== "object") {
@@ -90,25 +91,33 @@
     return true;
   }
 
-  function renderStatus(payload, requestRevision = questionRevision) {
+  function renderStatus(payload, requestID, requestRevision) {
+    if (requestID !== latestStatusRequestID || requestRevision !== questionRevision) {
+      return;
+    }
+
     const snapshot = field(payload, "host", "Host") || payload;
+    setServerError("");
     elements.statusText.textContent = snapshotText(snapshot);
 
     const pending = field(payload, "pending", "Pending");
-    if (pending && requestRevision === questionRevision) {
+    if (pending) {
       renderQuestionFrame(pending);
-    } else if (requestRevision === questionRevision) {
+    } else {
       clearQuestionFrame();
     }
   }
 
   async function refreshStatus() {
+    const requestID = ++latestStatusRequestID;
     const requestRevision = questionRevision;
     try {
       const payload = await requestJSON("/status");
-      renderStatus(payload, requestRevision);
+      renderStatus(payload, requestID, requestRevision);
     } catch (error) {
-      setServerError(error.message || "Could not load host status.");
+      if (requestID === latestStatusRequestID && requestRevision === questionRevision) {
+        setServerError(error.message || "Could not load host status.");
+      }
     }
   }
 
@@ -296,6 +305,7 @@
       }
     });
     eventSource.addEventListener("question", handleQuestion);
+    eventSource.addEventListener("runtime_replay", rememberEventID);
     eventSource.addEventListener("reset", (event) => {
       rememberEventID(event);
       void refreshStatus();

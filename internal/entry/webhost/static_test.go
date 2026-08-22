@@ -58,12 +58,27 @@ func TestAppHydratesPendingQuestionsFromStatus(t *testing.T) {
 	content := embeddedAppJS(t)
 	for _, want := range []string{
 		`const pending = field(payload, "pending", "Pending");`,
-		`if (pending && requestRevision === questionRevision) {`,
+		`if (pending) {`,
 		`renderQuestionFrame(pending);`,
 		`clearQuestionFrame();`,
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("web/app.js does not contain pending-question hydration assertion %q", want)
+		}
+	}
+}
+
+func TestAppIgnoresObsoleteStatusResponses(t *testing.T) {
+	content := embeddedAppJS(t)
+	for _, want := range []string{
+		`let latestStatusRequestID = 0;`,
+		`const requestID = ++latestStatusRequestID;`,
+		`function renderStatus(payload, requestID, requestRevision) {`,
+		`if (requestID !== latestStatusRequestID || requestRevision !== questionRevision) {`,
+		`if (requestID === latestStatusRequestID && requestRevision === questionRevision) {`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("web/app.js does not contain status ordering assertion %q", want)
 		}
 	}
 }
@@ -75,6 +90,7 @@ func TestAppReconnectsFromLatestEventCursor(t *testing.T) {
 		`event.lastEventId`,
 		`/events?after=`,
 		`eventSource.addEventListener("heartbeat", rememberEventID);`,
+		`eventSource.addEventListener("runtime_replay", rememberEventID);`,
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("web/app.js does not contain reconnect cursor assertion %q", want)
