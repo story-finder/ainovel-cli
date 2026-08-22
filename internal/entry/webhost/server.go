@@ -49,6 +49,7 @@ func newServer(rt runtime, replayLimit int) *server {
 
 	s.mux.HandleFunc("/status", s.handleStatus)
 	s.mux.HandleFunc("/commands", s.handleCommands)
+	s.mux.HandleFunc("/questions", s.handleNotFound)
 	s.mux.HandleFunc("/questions/", s.handleQuestions)
 	s.mux.HandleFunc("/", s.handleNotFound)
 	return s
