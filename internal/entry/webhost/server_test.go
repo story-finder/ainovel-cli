@@ -117,8 +117,12 @@ func newTestServer(t *testing.T, rt *fakeRuntime) *httptest.Server {
 
 func newTestServerWithReplayLimit(t *testing.T, rt *fakeRuntime, replayLimit int) *httptest.Server {
 	t.Helper()
-	server := httptest.NewServer(newServer(rt, replayLimit).Handler())
-	t.Cleanup(server.Close)
+	app := newServer(rt, replayLimit)
+	server := httptest.NewServer(app.Handler())
+	t.Cleanup(func() {
+		server.Close()
+		app.Close()
+	})
 	return server
 }
 

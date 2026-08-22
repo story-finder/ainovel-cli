@@ -1,12 +1,14 @@
 package webhost
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/entry/startup"
@@ -30,10 +32,13 @@ type runtime interface {
 }
 
 type server struct {
-	rt     runtime
-	mux    *http.ServeMux
-	hub    *eventHub
-	broker *questionBroker
+	rt         runtime
+	mux        *http.ServeMux
+	hub        *eventHub
+	broker     *questionBroker
+	pumpCancel context.CancelFunc
+	pumpDone   chan struct{}
+	closeOnce  sync.Once
 }
 
 func newServer(rt runtime, replayLimit int) *server {
@@ -49,9 +54,11 @@ func newServer(rt runtime, replayLimit int) *server {
 
 	s.mux.HandleFunc("/status", s.handleStatus)
 	s.mux.HandleFunc("/commands", s.handleCommands)
+	s.mux.HandleFunc("/events", s.handleEvents)
 	s.mux.HandleFunc("/questions", s.handleNotFound)
 	s.mux.HandleFunc("/questions/", s.handleQuestions)
 	s.mux.HandleFunc("/", s.handleNotFound)
+	s.startPump()
 	return s
 }
 
