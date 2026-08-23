@@ -86,15 +86,13 @@ func (h *eventHub) subscribe(after int64) subscription {
 
 	if after == 0 {
 		sub.Replay = append([]frame(nil), h.history...)
+	} else if after > h.nextID || (len(h.history) > 0 && after < h.lastDroppedID) {
+		sub.Reset = true
+		sub.ResetID = h.nextIDLocked()
 	} else if len(h.history) > 0 {
-		if after > 0 && after < h.lastDroppedID {
-			sub.Reset = true
-			sub.ResetID = h.nextIDLocked()
-		} else {
-			for _, f := range h.history {
-				if f.ID > after {
-					sub.Replay = append(sub.Replay, f)
-				}
+		for _, f := range h.history {
+			if f.ID > after {
+				sub.Replay = append(sub.Replay, f)
 			}
 		}
 	}

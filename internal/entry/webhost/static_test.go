@@ -110,6 +110,7 @@ func TestAppReconnectsFromLatestEventCursor(t *testing.T) {
 	content := embeddedAppJS(t)
 	for _, want := range []string{
 		`let lastEventID = null;`,
+		`lastEventID = null;`,
 		`event.lastEventId`,
 		`/events?after=`,
 		`eventSource.addEventListener("heartbeat", rememberEventID);`,
@@ -143,6 +144,11 @@ func TestAppRendersUISnapshotDiagnosticsAndRuntimeReplay(t *testing.T) {
 		`get(snapshot, "missingAssistantUsage", "MissingAssistantUsage")`,
 		`get(snapshot, "overallRecentCacheRead", "OverallRecentCacheRead")`,
 		`get(snapshot, "rewriteReason", "RewriteReason")`,
+		`get(snapshot, "outline", "Outline")`,
+		`get(snapshot, "characters", "Characters")`,
+		`get(snapshot, "premise", "Premise")`,
+		`get(snapshot, "supportingCount", "SupportingCount")`,
+		`get(snapshot, "recentSummaries", "RecentSummaries")`,
 		`kind === "ui_event"`,
 		`addEventMessage(`,
 	} {
@@ -158,6 +164,12 @@ func TestAppRendersUISnapshotDiagnosticsAndRuntimeReplay(t *testing.T) {
 		`id="status-cache-recent"`,
 		`id="status-rewrite-reason"`,
 		`id="status-novel"`,
+		`id="status-outline"`,
+		`id="status-characters"`,
+		`id="status-premise"`,
+		`id="status-supporting"`,
+		`id="status-compass"`,
+		`id="status-summaries"`,
 	} {
 		if !strings.Contains(index, want) {
 			t.Fatalf("web/index.html does not contain snapshot field %q", want)

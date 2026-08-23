@@ -301,6 +301,7 @@ dd {
 
 .detail-list dd {
   text-align: right;
+  overflow-wrap: anywhere;
 }
 
 .status-progress {

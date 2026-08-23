@@ -117,6 +117,13 @@
   const number = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
   const formatNumber = (value) => number(value).toLocaleString("vi-VN");
   const formatMoney = (value) => `${number(value).toFixed(4)} đô la Mỹ`;
+  const compact = (value, limit = 240) => {
+    const raw = text(value);
+    return raw.length > limit ? `${raw.slice(0, limit - 1)}…` : raw;
+  };
+  const compactList = (value, limit = 8) => Array.isArray(value) && value.length
+    ? value.slice(0, limit).map((item) => compact(item, 80)).join(" · ") + (value.length > limit ? " · …" : "")
+    : "Chưa có dữ liệu";
   const formatError = (error, fallback = "Đã xảy ra lỗi.") => error && error.message ? error.message : fallback;
   const translate = (value, labels, fallback = "Chưa có dữ liệu") => {
     const key = String(value || "").trim().toLowerCase();
@@ -325,7 +332,12 @@
     onEvent("command_result", (payload) => { addCommandResult(payload); refreshStatus(); });
     onEvent("terminal", (payload) => { finishAssistant(); renderStatus({ host: payload }); refreshStatus(); });
     onEvent("question", (payload) => renderQuestionFrame(payload));
-    onEvent("reset", () => { finishAssistant(); refreshStatus(); });
+    onEvent("reset", () => {
+      lastEventID = null;
+      finishAssistant();
+      refreshStatus();
+      connectEvents();
+    });
     onEvent("runtime_replay", replayRuntime);
     eventSource.addEventListener("heartbeat", rememberEventID);
     eventSource.addEventListener("runtime_replay", rememberEventID);
@@ -366,6 +378,21 @@
     setField("statusNovel", get(snapshot, "novelName", "NovelName"));
     setField("statusVolumeArc", get(snapshot, "currentVolumeArc", "CurrentVolumeArc"));
     setField("statusNextVolume", get(snapshot, "nextVolumeTitle", "NextVolumeTitle"));
+    const outline = get(snapshot, "outline", "Outline");
+    setField("statusOutline", Array.isArray(outline) && outline.length
+      ? compactList(outline.map((item) => `Chương ${text(get(item, "chapter", "Chapter"))}: ${text(get(item, "title", "Title"))}`), 12)
+      : "Chưa có dữ liệu");
+    setField("statusCharacters", compactList(get(snapshot, "characters", "Characters")));
+    setField("statusPremise", compact(get(snapshot, "premise", "Premise")));
+    const supporting = get(snapshot, "recentSupporting", "RecentSupporting");
+    const supportingCount = number(get(snapshot, "supportingCount", "SupportingCount"));
+    setField("statusSupporting", supportingCount
+      ? `${formatNumber(supportingCount)} nhân vật · ${compactList(supporting, 5)}`
+      : "Chưa có dữ liệu");
+    const compassDirection = text(get(snapshot, "compassDirection", "CompassDirection"));
+    const compassScale = text(get(snapshot, "compassScale", "CompassScale"));
+    setField("statusCompass", compassDirection ? `${compassDirection}${compassScale ? ` · ${compassScale}` : ""}` : "Chưa có dữ liệu");
+    setField("statusSummaries", compactList(get(snapshot, "recentSummaries", "RecentSummaries"), 3));
     setField("statusCheckpoint", get(snapshot, "lastCheckpointName", "LastCheckpointName"));
     setField("statusLastCommit", get(snapshot, "lastCommitSummary", "LastCommitSummary"));
     setField("statusLastReview", get(snapshot, "lastReviewSummary", "LastReviewSummary"));
@@ -568,9 +595,15 @@
     elements.composerInput.value = "";
     elements.commandPalette.hidden = true;
     if (value.startsWith("/")) {
-      const modelCommand = value.match(/^\/model(?:\s|$)/);
+      const modelCommand = value.match(/^\/model(?:\s+(.+))?$/i);
       if (modelCommand) {
-        const role = value.slice(modelCommand[0].length).trim().split(/\s+/)[0] || "default";
+        const modelArgs = (modelCommand[1] || "").trim().split(/\s+/).filter(Boolean);
+        if (modelArgs.length > 1) {
+          addUserMessage(value);
+          setError("lệnh /model chỉ nhận tối đa một vai trò");
+          return;
+        }
+        const role = modelArgs[0] || "default";
         elements.composerInput.value = role === "default" ? "/model " : `/model ${role}`;
         await openModelPanel(role);
         return;
@@ -667,6 +700,12 @@
       statusConnection: "status-connection",
       statusVolumeArc: "status-volume-arc",
       statusNextVolume: "status-next-volume",
+      statusOutline: "status-outline",
+      statusCharacters: "status-characters",
+      statusPremise: "status-premise",
+      statusSupporting: "status-supporting",
+      statusCompass: "status-compass",
+      statusSummaries: "status-summaries",
       statusCheckpoint: "status-checkpoint",
       statusLastCommit: "status-last-commit",
       statusLastReview: "status-last-review",

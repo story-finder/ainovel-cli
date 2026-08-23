@@ -572,8 +572,10 @@ func TestWebAppKeepsCoCreateReservedThroughAsyncApplyAndCleansFailedRequests(t *
 func TestWebAppOpensModelPickerOnlyForExactCommand(t *testing.T) {
 	content := embeddedAppJS(t)
 	for _, want := range []string{
-		`const modelCommand = value.match(/^\/model(?:\s|$)/);`,
-		`const role = value.slice(modelCommand[0].length).trim().split(/\s+/)[0] || "default";`,
+		`const modelCommand = value.match(/^\/model(?:\s+(.+))?$/i);`,
+		`const modelArgs = (modelCommand[1] || "").trim().split(/\s+/).filter(Boolean);`,
+		`if (modelArgs.length > 1) {`,
+		`lệnh /model chỉ nhận tối đa một vai trò`,
 		`await openModelPanel(role);`,
 	} {
 		if !strings.Contains(content, want) {

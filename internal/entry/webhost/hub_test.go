@@ -45,6 +45,21 @@ func TestHubRequestsResetWhenLastIDPredatesBuffer(t *testing.T) {
 	}
 }
 
+func TestHubRequestsResetWhenLastIDBelongsToPreviousProcess(t *testing.T) {
+	hub := newEventHub(8)
+	hub.publish("runtime_replay", "persisted")
+
+	sub := hub.subscribe(42)
+	defer sub.Cancel()
+
+	if !sub.Reset {
+		t.Fatal("subscribe did not request a reset for a cursor from a previous process")
+	}
+	if len(sub.Replay) != 0 {
+		t.Fatalf("Replay length = %d, want 0", len(sub.Replay))
+	}
+}
+
 func TestHubFansOutWithoutBlockingPublisher(t *testing.T) {
 	hub := newEventHub(8)
 	first := hub.subscribe(0)
