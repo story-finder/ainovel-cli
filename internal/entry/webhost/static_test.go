@@ -135,6 +135,36 @@ func TestAppMakesCustomAnswersExclusiveForSingleSelect(t *testing.T) {
 	}
 }
 
+func TestAppRendersUISnapshotDiagnosticsAndRuntimeReplay(t *testing.T) {
+	content := embeddedAppJS(t)
+	for _, want := range []string{
+		`get(snapshot, "contextStrategy", "ContextStrategy")`,
+		`get(snapshot, "contextCompactedCount", "ContextCompactedCount")`,
+		`get(snapshot, "missingAssistantUsage", "MissingAssistantUsage")`,
+		`get(snapshot, "overallRecentCacheRead", "OverallRecentCacheRead")`,
+		`get(snapshot, "rewriteReason", "RewriteReason")`,
+		`kind === "ui_event"`,
+		`addEventMessage(`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("web/app.js does not contain snapshot/replay assertion %q", want)
+		}
+	}
+
+	index := embeddedIndexHTML(t)
+	for _, want := range []string{
+		`id="status-context-strategy"`,
+		`id="status-missing-usage"`,
+		`id="status-cache-recent"`,
+		`id="status-rewrite-reason"`,
+		`id="status-novel"`,
+	} {
+		if !strings.Contains(index, want) {
+			t.Fatalf("web/index.html does not contain snapshot field %q", want)
+		}
+	}
+}
+
 func embeddedAppJS(t *testing.T) string {
 	t.Helper()
 	app, err := webFS.ReadFile("web/app.js")
@@ -142,6 +172,15 @@ func embeddedAppJS(t *testing.T) string {
 		t.Fatalf("read embedded web/app.js: %v", err)
 	}
 	return string(app)
+}
+
+func embeddedIndexHTML(t *testing.T) string {
+	t.Helper()
+	index, err := webFS.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatalf("read embedded web/index.html: %v", err)
+	}
+	return string(index)
 }
 
 func embeddedMarkdownJS(t *testing.T) string {

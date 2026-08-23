@@ -39,6 +39,18 @@
     polishing: "Đánh bóng",
     steering: "Điều chỉnh",
   };
+  const contextScopeLabels = {
+    baseline: "Cơ sở",
+    projected: "Dự kiến",
+    recovered: "Đã khôi phục",
+    committed: "Đã lưu",
+    skipped: "Bỏ qua do ngắt mạch",
+  };
+  const contextStrategyLabels = {
+    tool_result_microcompact: "Nén nhỏ kết quả công cụ",
+    light_trim: "Cắt nhẹ",
+    full_summary: "Tóm tắt toàn bộ",
+  };
   const runtimeStateLabels = {
     idle: "Đang chờ",
     running: "Đang chạy",
@@ -270,6 +282,15 @@
   function replayRuntime(item) {
     const kind = text(field(item, "kind", "Kind")).toLowerCase();
     const payload = field(item, "payload", "Payload") || {};
+    if (kind === "ui_event") {
+      const summary = text(field(item, "summary", "Summary"));
+      if (summary) {
+        const category = text(field(item, "category", "Category"), "Máy chủ");
+        const level = category.toLowerCase() === "error" ? "error" : "info";
+        addEventMessage(text(field(item, "agent", "Agent"), category), summary, level, "Đã lưu");
+      }
+      return;
+    }
     if (kind === "stream_clear") {
       startAssistantMessage();
       return;
@@ -316,6 +337,8 @@
   function statusLabel(value) { return translate(value, statusLabelMap); }
   function phaseLabel(value) { return translate(value, phaseLabels); }
   function flowLabel(value) { return translate(value, flowLabels); }
+  function contextScopeLabel(value) { return translate(value, contextScopeLabels); }
+  function contextStrategyLabel(value) { return translate(value, contextStrategyLabels); }
 
   function setField(id, value) { if (elements[id]) elements[id].textContent = text(value, "Chưa có dữ liệu"); }
   function percentage(value) { return `${Math.max(0, Math.min(100, number(value))).toFixed(1)}%`; }
@@ -340,6 +363,12 @@
     setField("statusPhase", phaseLabel(get(snapshot, "phase", "Phase")));
     setField("statusThread", flowLabel(get(snapshot, "flow", "Flow")));
     setField("statusModel", get(snapshot, "modelName", "ModelName"));
+    setField("statusNovel", get(snapshot, "novelName", "NovelName"));
+    setField("statusVolumeArc", get(snapshot, "currentVolumeArc", "CurrentVolumeArc"));
+    setField("statusNextVolume", get(snapshot, "nextVolumeTitle", "NextVolumeTitle"));
+    setField("statusCheckpoint", get(snapshot, "lastCheckpointName", "LastCheckpointName"));
+    setField("statusLastCommit", get(snapshot, "lastCommitSummary", "LastCommitSummary"));
+    setField("statusLastReview", get(snapshot, "lastReviewSummary", "LastReviewSummary"));
     const current = number(get(snapshot, "currentChapter", "CurrentChapter"));
     const total = number(get(snapshot, "totalChapters", "TotalChapters"));
     setField("statusProgress", total ? `${current}/${total}` : current || "Chưa có dữ liệu");
@@ -355,15 +384,31 @@
     const contextWindow = get(snapshot, "contextWindow", "ContextWindow");
     setField("statusContext", `${formatNumber(get(snapshot, "contextTokens", "ContextTokens"))}/${formatNumber(contextWindow)} token`);
     setField("statusContextUsed", percentage(get(snapshot, "contextPercent", "ContextPercent")));
+    setField("statusContextScope", contextScopeLabel(get(snapshot, "contextScope", "ContextScope")));
+    setField("statusContextStrategy", contextStrategyLabel(get(snapshot, "contextStrategy", "ContextStrategy")));
+    setField("statusContextActive", formatNumber(get(snapshot, "contextActiveMessages", "ContextActiveMessages")));
+    setField("statusContextSummary", formatNumber(get(snapshot, "contextSummaryCount", "ContextSummaryCount")));
+    setField("statusContextCompacted", formatNumber(get(snapshot, "contextCompactedCount", "ContextCompactedCount")));
+    setField("statusContextKept", formatNumber(get(snapshot, "contextKeptCount", "ContextKeptCount")));
     setField("statusWritingStyle", get(snapshot, "style", "Style"));
     setField("statusUsage", `vào ${formatNumber(get(snapshot, "totalInputTokens", "TotalInputTokens"))} · ra ${formatNumber(get(snapshot, "totalOutputTokens", "TotalOutputTokens"))}`);
     setField("statusCost", `${formatMoney(get(snapshot, "totalCostUSD", "TotalCostUSD"))} · tiết kiệm ${formatMoney(get(snapshot, "totalSavedUSD", "TotalSavedUSD"))}`);
     setField("statusBudget", number(get(snapshot, "budgetLimitUSD", "BudgetLimitUSD")) ? formatMoney(get(snapshot, "budgetLimitUSD", "BudgetLimitUSD")) : "Chưa bật");
+    const missingUsage = number(get(snapshot, "missingAssistantUsage", "MissingAssistantUsage"));
+    setField("statusMissingUsage", missingUsage ? `⚠ Chưa nhận được usage (${formatNumber(missingUsage)} lần)` : "Không phát hiện");
     setField("statusCache", get(snapshot, "overallCacheCapable", "OverallCacheCapable") ? "Có hỗ trợ" : "Chưa hỗ trợ");
     setField("statusCacheRead", formatNumber(get(snapshot, "totalCacheReadTokens", "TotalCacheReadTokens")));
     setField("statusCacheWrite", formatNumber(get(snapshot, "totalCacheWriteTokens", "TotalCacheWriteTokens")));
+    const recentCacheSamples = number(get(snapshot, "overallRecentSamples", "OverallRecentSamples"));
+    const recentCacheRead = formatNumber(get(snapshot, "overallRecentCacheRead", "OverallRecentCacheRead"));
+    const recentInput = formatNumber(get(snapshot, "overallRecentInput", "OverallRecentInput"));
+    const recentCacheRate = number(get(snapshot, "overallRecentInput", "OverallRecentInput")) > 0
+      ? `${((number(get(snapshot, "overallRecentCacheRead", "OverallRecentCacheRead")) / number(get(snapshot, "overallRecentInput", "OverallRecentInput"))) * 100).toFixed(1)}% hit`
+      : "Chưa có dữ liệu";
+    setField("statusCacheRecent", recentCacheSamples ? `${recentCacheRate} · ${recentCacheRead}/${recentInput} token · ${formatNumber(recentCacheSamples)} lượt` : "Chưa có dữ liệu");
     const rewrites = get(snapshot, "pendingRewrites", "PendingRewrites");
     setField("statusRewrites", Array.isArray(rewrites) && rewrites.length ? rewrites.join(", ") : "Không có");
+    setField("statusRewriteReason", get(snapshot, "rewriteReason", "RewriteReason"));
     setField("statusSteer", get(snapshot, "pendingSteer", "PendingSteer") || "Không có");
     const recovery = text(get(snapshot, "recoveryLabel", "RecoveryLabel"));
     setField("statusRecovery", recovery || "Không có");
@@ -616,22 +661,37 @@
       statusDetails: "status-details",
       statusDetailsToggle: "status-details-toggle",
       statusProvider: "status-provider",
+      statusNovel: "status-novel",
       statusModelDetail: "status-model-detail",
       statusStyle: "status-style",
       statusConnection: "status-connection",
+      statusVolumeArc: "status-volume-arc",
+      statusNextVolume: "status-next-volume",
+      statusCheckpoint: "status-checkpoint",
+      statusLastCommit: "status-last-commit",
+      statusLastReview: "status-last-review",
       statusAgent: "status-agent",
       statusTool: "status-tool",
       statusChapter: "status-chapter",
       statusContext: "status-context",
       statusContextUsed: "status-context-used",
+      statusContextScope: "status-context-scope",
+      statusContextStrategy: "status-context-strategy",
+      statusContextActive: "status-context-active",
+      statusContextSummary: "status-context-summary",
+      statusContextCompacted: "status-context-compacted",
+      statusContextKept: "status-context-kept",
       statusWritingStyle: "status-writing-style",
       statusUsage: "status-usage",
       statusCost: "status-cost",
       statusBudget: "status-budget",
+      statusMissingUsage: "status-missing-usage",
       statusCache: "status-cache",
       statusCacheRead: "status-cache-read",
       statusCacheWrite: "status-cache-write",
+      statusCacheRecent: "status-cache-recent",
       statusRewrites: "status-rewrites",
+      statusRewriteReason: "status-rewrite-reason",
       statusSteer: "status-steer",
       statusRecovery: "status-recovery",
       progressText: "progress-text",
