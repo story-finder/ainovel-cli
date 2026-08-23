@@ -316,10 +316,11 @@
     }
     const snapshot = get(payload, "host", "Host") || payload || {};
     state.status = snapshot;
-    state.started = Boolean(get(snapshot, "isRunning", "IsRunning")) || ["running", "writing", "reviewing", "rewriting", "polishing"].includes(String(get(snapshot, "runtimeState", "RuntimeState")).toLowerCase());
-    const runtime = runtimeLabel(get(snapshot, "runtimeState", "RuntimeState"));
+    const runtimeState = String(get(snapshot, "runtimeState", "RuntimeState") || "").toLowerCase();
+    state.started = Boolean(get(snapshot, "isRunning", "IsRunning")) || ["running", "writing", "reviewing", "rewriting", "polishing"].includes(runtimeState);
+    const runtime = runtimeLabel(runtimeState);
     const translatedStatus = statusLabel(get(snapshot, "statusLabel", "StatusLabel"));
-    setField("statusText", translatedStatus === "Chưa xác định" || translatedStatus === "Chưa có dữ liệu" ? runtime : translatedStatus);
+    setField("statusText", ["paused", "pausing", "completed"].includes(runtimeState) ? runtime : translatedStatus === "Chưa xác định" || translatedStatus === "Chưa có dữ liệu" ? runtime : translatedStatus);
     setField("statusPhase", phaseLabel(get(snapshot, "phase", "Phase")));
     setField("statusThread", flowLabel(get(snapshot, "flow", "Flow")));
     setField("statusModel", get(snapshot, "modelName", "ModelName"));

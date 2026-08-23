@@ -8,7 +8,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -453,6 +456,34 @@ func TestStatusReturnsExistingHostSnapshot(t *testing.T) {
 	}
 	if body.Pending != nil {
 		t.Fatalf("status pending = %#v, want nil", body.Pending)
+	}
+}
+
+func TestWebAppRuntimeStatusOverridesBackendLabelForTerminalStates(t *testing.T) {
+	_, filename, _, ok := goruntime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	appSource, err := os.ReadFile(filepath.Join(filepath.Dir(filename), "web", "app.js"))
+	if err != nil {
+		t.Fatalf("read web app: %v", err)
+	}
+
+	source := string(appSource)
+	start := strings.Index(source, "function renderStatus(")
+	end := strings.Index(source[start:], "function refreshStatus(")
+	if start < 0 || end < 0 {
+		t.Fatal("could not isolate renderStatus")
+	}
+	renderStatus := source[start : start+end]
+	for _, expected := range []string{
+		`const runtimeState = String(get(snapshot, "runtimeState", "RuntimeState") || "").toLowerCase();`,
+		`["paused", "pausing", "completed"].includes(runtimeState)`,
+		`setField("statusText", ["paused", "pausing", "completed"].includes(runtimeState) ? runtime : translatedStatus === "Chưa xác định" || translatedStatus === "Chưa có dữ liệu" ? runtime : translatedStatus);`,
+	} {
+		if !strings.Contains(renderStatus, expected) {
+			t.Fatalf("renderStatus missing terminal runtime precedence: %s", expected)
+		}
 	}
 }
 
