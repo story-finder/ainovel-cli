@@ -1,349 +1,419 @@
 (() => {
   "use strict";
 
-  let eventSource = null;
-  let pendingQuestion = null;
-  let lastEventID = null;
-  let questionRevision = 0;
-  let latestStatusRequestID = 0;
-
-  const field = (value, lower, upper) => {
-    if (!value || typeof value !== "object") {
-      return undefined;
-    }
-    return value[lower] ?? value[upper];
+  const commands = [
+    { name: "model", usage: "/model [vai-trò]", description: "Chọn vai trò, nhà cung cấp và mô hình" },
+    { name: "diag", usage: "/diag", description: "Xem báo cáo chẩn đoán sáng tác" },
+    { name: "export", usage: "/export", description: "Xuất truyện ra TXT hoặc EPUB" },
+    { name: "import", usage: "/import <đường-dẫn>", description: "Nhập tiểu thuyết để tiếp tục viết" },
+    { name: "simulate", usage: "/simulate", description: "Tạo hồ sơ phong cách từ thư mục simulate" },
+    { name: "cocreate", usage: "/cocreate", description: "Tạm dừng để cùng lên kế hoạch giai đoạn tiếp theo" },
+  ];
+  const roles = ["default", "coordinator", "architect", "writer", "editor"];
+  const state = {
+    messages: [{ kind: "assistant", text: "Sẵn sàng đồng hành cùng bạn. Hãy mô tả ý tưởng, nhân vật hoặc cảnh mở đầu để bắt đầu." }],
+    streamingIndex: -1,
+    commandIndex: 0,
+    pendingQuestion: null,
+    lastEventID: null,
+    statusTimer: null,
+    status: null,
+    started: false,
+    coCreateActive: false,
+    detailsOpen: false,
+    eventSource: null,
+    questionRevision: 0,
+    statusRequest: 0,
   };
-
   const elements = {};
 
+  const get = (object, ...names) => {
+    if (!object || typeof object !== "object") return undefined;
+    for (const name of names) {
+      if (name in object) return object[name];
+      const found = Object.keys(object).find((key) => key.toLowerCase() === name.toLowerCase());
+      if (found) return object[found];
+    }
+    return undefined;
+  };
+  const text = (value, fallback = "") => value === undefined || value === null || value === "" ? fallback : String(value);
+  const number = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
+  const formatNumber = (value) => number(value).toLocaleString("vi-VN");
+  const formatMoney = (value) => `${number(value).toFixed(4)} USD`;
+  const formatError = (error, fallback = "Đã xảy ra lỗi.") => error && error.message ? error.message : fallback;
+
   function rememberEventID(event) {
-    const rawID = event && event.lastEventId;
-    if (!rawID || !/^\d+$/.test(rawID)) {
-      return;
-    }
-    const eventID = Number(rawID);
-    if (Number.isSafeInteger(eventID)) {
-      lastEventID = eventID;
-    }
+    const raw = event && event.lastEventId;
+    if (/^\d+$/.test(raw || "")) state.lastEventID = Number(raw);
   }
 
-  function setServerError(message) {
+  function setError(message) {
     elements.serverError.textContent = message ? String(message) : "";
-  }
-
-  function setQuestionError(message) {
-    elements.questionError.textContent = message ? String(message) : "";
-  }
-
-  function errorMessage(payload, fallback) {
-    const message = field(payload, "error", "Error");
-    return typeof message === "string" && message.trim() ? message : fallback;
   }
 
   async function requestJSON(url, options) {
     const response = await fetch(url, options);
     let payload = null;
-    try {
-      payload = await response.json();
-    } catch (_error) {
-      payload = null;
-    }
-    if (!response.ok) {
-      throw new Error(errorMessage(payload, `Request failed (${response.status})`));
-    }
-    return payload;
+    try { payload = await response.json(); } catch (_) { payload = null; }
+    if (!response.ok) throw new Error(text(get(payload, "error", "Error"), `Máy chủ trả về lỗi ${response.status}.`));
+    return payload || {};
   }
 
-  function snapshotText(snapshot) {
-    const state = field(snapshot, "RuntimeState", "runtimeState") || field(snapshot, "runtime_state", "RuntimeState");
-    const label = field(snapshot, "StatusLabel", "statusLabel");
-    const phase = field(snapshot, "Phase", "phase");
-    const chapter = field(snapshot, "CurrentChapter", "currentChapter");
-    const parts = [label, state, phase];
-    if (chapter) {
-      parts.push(`Chapter ${chapter}`);
+  function messageNode(message) {
+    const article = document.createElement("article");
+    article.className = `message message-${message.kind || "event"}`;
+    if (message.streaming) article.classList.add("is-streaming");
+    const meta = document.createElement("div");
+    meta.className = "message-meta";
+    const author = document.createElement("span");
+    author.textContent = message.author || (message.kind === "user" ? "Bạn" : "AI Novel");
+    const label = document.createElement("span");
+    label.textContent = message.label || (message.kind === "user" ? "Yêu cầu" : "Phản hồi");
+    meta.append(author, label);
+    const content = document.createElement("div");
+    content.className = `message-content ${message.kind === "user" ? "user-text" : "assistant-markdown"}`;
+    if (message.kind === "user") {
+      content.textContent = message.text || "";
+    } else if (message.markdown || message.text) {
+      const renderer = window.AINovelMarkdown && window.AINovelMarkdown.render;
+      if (renderer) content.innerHTML = renderer(message.markdown || message.text || "");
+      else content.textContent = message.markdown || message.text || "";
     }
-    return parts.filter((part) => part !== undefined && part !== null && String(part).trim()).map(String).join(" · ") || "Connected";
+    article.append(meta, content);
+    if (message.actions) appendActions(article, message.actions);
+    return article;
   }
 
-  function clearQuestionFrame() {
-    pendingQuestion = null;
-    elements.questionItems.replaceChildren();
-    setQuestionError("");
-    elements.question.hidden = true;
+  function appendActions(article, actions) {
+    const wrap = document.createElement("div");
+    wrap.className = "message-actions";
+    actions.forEach((action) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = action.secondary ? "secondary" : "";
+      button.textContent = action.label;
+      button.addEventListener("click", action.handler);
+      wrap.appendChild(button);
+    });
+    article.appendChild(wrap);
   }
 
-  function renderQuestionFrame(frame) {
-    const id = field(frame, "id", "ID");
-    const questions = field(frame, "questions", "Questions");
-    if (typeof id !== "string" || !Array.isArray(questions)) {
-      const message = "The server sent an invalid question.";
-      clearQuestionFrame();
-      setQuestionError(message);
-      setServerError(message);
-      return false;
-    }
-
-    pendingQuestion = { id, questions };
-    renderQuestions(questions);
-    setQuestionError("");
-    elements.question.hidden = false;
-    return true;
+  function renderChat() {
+    elements.transcript.replaceChildren(...state.messages.map(messageNode));
+    elements.transcript.scrollTop = elements.transcript.scrollHeight;
   }
 
-  function renderStatus(payload, requestID, requestRevision) {
-    if (requestID !== latestStatusRequestID || requestRevision !== questionRevision) {
-      return;
-    }
-
-    const snapshot = field(payload, "host", "Host") || payload;
-    setServerError("");
-    elements.statusText.textContent = snapshotText(snapshot);
-
-    const pending = field(payload, "pending", "Pending");
-    if (pending) {
-      renderQuestionFrame(pending);
-    } else {
-      clearQuestionFrame();
-    }
+  function addUserMessage(value) {
+    const valueText = String(value || "").trim();
+    if (!valueText) return;
+    state.messages.push({ kind: "user", text: valueText });
+    renderChat();
   }
 
-  async function refreshStatus() {
-    const requestID = ++latestStatusRequestID;
-    const requestRevision = questionRevision;
-    try {
-      const payload = await requestJSON("/status");
-      renderStatus(payload, requestID, requestRevision);
-    } catch (error) {
-      if (requestID === latestStatusRequestID && requestRevision === questionRevision) {
-        setServerError(error.message || "Could not load host status.");
-      }
+  function startAssistantMessage() {
+    if (state.streamingIndex >= 0) state.messages[state.streamingIndex].streaming = false;
+    state.messages.push({ kind: "assistant", markdown: "", streaming: true, label: "Đang phản hồi" });
+    state.streamingIndex = state.messages.length - 1;
+    renderChat();
+  }
+
+  function appendAssistantDelta(delta) {
+    if (typeof delta !== "string" || !delta) return;
+    if (state.streamingIndex < 0) startAssistantMessage();
+    state.messages[state.streamingIndex].markdown += delta;
+    renderChat();
+  }
+
+  function finishAssistant() {
+    if (state.streamingIndex >= 0) {
+      state.messages[state.streamingIndex].streaming = false;
+      state.messages[state.streamingIndex].label = "Phản hồi hoàn tất";
+      state.streamingIndex = -1;
+      renderChat();
     }
   }
 
-  async function sendCommand(action, text) {
-    try {
-      await requestJSON("/commands", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, text })
-      });
-      setServerError("");
-      await refreshStatus();
-    } catch (error) {
-      setServerError(error.message || "The command could not be completed.");
-    }
+  function addEventMessage(author, content, level = "info", label = "Thông tin") {
+    if (!content) return;
+    state.messages.push({ kind: level === "error" ? "event" : "progress", author: text(author, "Máy chủ"), label, markdown: String(content) });
+    renderChat();
+  }
+
+  function addCommandResult(payload) {
+    const markdown = text(get(payload, "markdown", "Markdown"));
+    const error = text(get(payload, "error", "Error"));
+    const ready = Boolean(get(payload, "ready", "Ready"));
+    const prompt = text(get(payload, "prompt", "Prompt"));
+    const suggestions = get(payload, "suggestions", "Suggestions");
+    const command = text(get(payload, "command", "Command"));
+    if (prompt || command === "/cocreate" || command === "cocreate") state.coCreateActive = true;
+    const actions = [];
+    if (ready && prompt) actions.push({ label: "Áp dụng và tiếp tục", handler: () => postInternal("cocreate_apply", prompt) });
+    if (state.coCreateActive) actions.push({ label: "Thoát đồng sáng tác", secondary: true, handler: () => postInternal("cocreate_cancel", "") });
+    state.messages.push({
+      kind: "result",
+      author: command || "Máy chủ",
+      label: error ? "Lỗi" : "Kết quả lệnh",
+      markdown: markdown || error,
+      actions: actions.length ? actions : undefined,
+    });
+    if (Array.isArray(suggestions)) addSuggestions(suggestions);
+    renderChat();
+  }
+
+  function addSuggestions(suggestions) {
+    const valid = suggestions.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 3);
+    if (!valid.length) return;
+    state.messages.push({ kind: "event", author: "Gợi ý", label: "Bạn có thể nói tiếp", markdown: valid.map((item, index) => `${index + 1}. ${item}`).join("\n") });
   }
 
   function parseEvent(event) {
-    try {
-      return JSON.parse(event.data);
-    } catch (_error) {
-      throw new Error(`Invalid ${event.type || "server"} event.`);
-    }
+    try { return JSON.parse(event.data); } catch (_) { throw new Error("Dữ liệu từ máy chủ không hợp lệ."); }
   }
 
-  function updateStatusFromEvent(payload) {
-    const summary = field(payload, "Summary", "summary");
-    if (typeof summary === "string" && summary.trim()) {
-      elements.statusText.textContent = summary;
-      return;
-    }
-    elements.statusText.textContent = snapshotText(payload);
-  }
-
-  function handleQuestion(event) {
-    rememberEventID(event);
-    let frame;
-    try {
-      frame = parseEvent(event);
-    } catch (error) {
-      setQuestionError(error.message);
-      setServerError(error.message);
-      return;
-    }
-
-    if (renderQuestionFrame(frame)) {
-      questionRevision += 1;
-    }
-  }
-
-  function renderQuestions(questions) {
-    elements.questionItems.replaceChildren();
-    questions.forEach((question, questionIndex) => {
-      const questionText = field(question, "question", "Question") || `Question ${questionIndex + 1}`;
-      const header = field(question, "header", "Header");
-      const options = field(question, "options", "Options");
-      const multiSelect = Boolean(field(question, "multiSelect", "MultiSelect"));
-      const fieldset = document.createElement("fieldset");
-      const legend = document.createElement("legend");
-      legend.textContent = header ? `${header}: ${questionText}` : questionText;
-      fieldset.appendChild(legend);
-
-      (Array.isArray(options) ? options : []).forEach((option, optionIndex) => {
-        const label = document.createElement("label");
-        label.className = "choice";
-        const input = document.createElement("input");
-        input.type = multiSelect ? "checkbox" : "radio";
-        input.name = `question-${questionIndex}`;
-        input.value = String(field(option, "label", "Label") || "");
-        input.dataset.questionIndex = String(questionIndex);
-        label.appendChild(input);
-
-        const copy = document.createElement("span");
-        const optionLabel = field(option, "label", "Label") || "Option";
-        const description = field(option, "description", "Description");
-        copy.textContent = description ? `${optionLabel} — ${description}` : optionLabel;
-        label.appendChild(copy);
-        fieldset.appendChild(label);
-      });
-
-      const customLabel = document.createElement("label");
-      customLabel.className = "custom-answer";
-      customLabel.textContent = "Custom answer (optional)";
-      const customInput = document.createElement("input");
-      customInput.type = "text";
-      customInput.name = `custom-${questionIndex}`;
-      customInput.dataset.questionIndex = String(questionIndex);
-      customInput.placeholder = "Add your own answer";
-      customLabel.appendChild(customInput);
-      fieldset.appendChild(customLabel);
-      elements.questionItems.appendChild(fieldset);
+  function onEvent(event, handler) {
+    elements.eventSource.addEventListener(event, (message) => {
+      rememberEventID(message);
+      try { handler(parseEvent(message), message); } catch (error) { setError(formatError(error, "Không thể đọc sự kiện máy chủ.")); }
     });
-  }
-
-  async function answerQuestion(event) {
-    event.preventDefault();
-    if (!pendingQuestion) {
-      return;
-    }
-
-    const answers = {};
-    const notes = {};
-    let invalid = false;
-    pendingQuestion.questions.forEach((question, questionIndex) => {
-      const questionText = field(question, "question", "Question") || `Question ${questionIndex + 1}`;
-      const multiSelect = Boolean(field(question, "multiSelect", "MultiSelect"));
-      const inputs = Array.from(elements.questionItems.querySelectorAll(`input[data-question-index="${questionIndex}"]`));
-      let selected = inputs.filter((input) => input.type === "radio" || input.type === "checkbox").filter((input) => input.checked).map((input) => input.value).filter(Boolean);
-      const custom = inputs.find((input) => input.type === "text");
-      const customText = custom ? custom.value.trim() : "";
-      if (customText) {
-        notes[questionText] = customText;
-        if (multiSelect) {
-          selected.push(customText);
-        } else {
-          selected = [customText];
-        }
-      }
-      if (selected.length === 0) {
-        invalid = true;
-        return;
-      }
-      answers[questionText] = selected.join(", ");
-    });
-
-    if (invalid) {
-      setQuestionError("Answer every question before sending.");
-      return;
-    }
-
-    try {
-      await requestJSON(`/questions/${encodeURIComponent(pendingQuestion.id)}/answer`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ answers, notes })
-      });
-      pendingQuestion = null;
-      questionRevision += 1;
-      clearQuestionFrame();
-      setServerError("");
-      await refreshStatus();
-    } catch (error) {
-      setQuestionError(error.message || "The answer could not be sent.");
-      setServerError(error.message || "The answer could not be sent.");
-    }
   }
 
   function connectEvents() {
-    if (eventSource) {
-      eventSource.close();
+    if (state.eventSource) state.eventSource.close();
+    const query = state.lastEventID === null ? "" : `?after=${encodeURIComponent(state.lastEventID)}`;
+    const source = new EventSource(`/events${query}`);
+    state.eventSource = source;
+    elements.eventSource = source;
+    source.addEventListener("open", () => setError(""));
+    onEvent("stream_clear", () => startAssistantMessage());
+    onEvent("stream_delta", (payload) => appendAssistantDelta(text(get(payload, "text", "Text"))));
+    onEvent("host_event", (payload) => {
+      const summary = text(get(payload, "summary", "Summary"), text(get(payload, "detail", "Detail")));
+      addEventMessage(text(get(payload, "agent", "Agent"), text(get(payload, "category", "Category"), "Máy chủ")), summary, text(get(payload, "level", "Level"), "info"), "Sự kiện");
+      refreshStatus();
+    });
+    onEvent("command_progress", (payload) => {
+      const current = number(get(payload, "current", "Current"));
+      const total = number(get(payload, "total", "Total"));
+      let progress = text(get(payload, "text", "Text"));
+      if (total) progress += ` (${current}/${total})`;
+      addEventMessage(text(get(payload, "command", "Command"), "Lệnh"), progress, text(get(payload, "level", "Level")), "Đang xử lý");
+    });
+    onEvent("command_result", (payload) => { addCommandResult(payload); refreshStatus(); });
+    onEvent("terminal", (payload) => { finishAssistant(); renderStatus({ host: payload }); refreshStatus(); });
+    onEvent("question", (payload) => renderQuestion(payload));
+    onEvent("reset", () => refreshStatus());
+    onEvent("runtime_replay", () => {});
+    onEvent("heartbeat", () => {});
+    source.addEventListener("error", () => setError("Luồng sự kiện đã ngắt, đang thử kết nối lại…"));
+  }
+
+  function stateLabel(value) {
+    return ({ running: "Đang chạy", writing: "Đang viết", reviewing: "Đang đánh giá", rewriting: "Đang viết lại", polishing: "Đang đánh bóng", paused: "Đã tạm dừng", completed: "Đã hoàn thành", idle: "Đang chờ", pausing: "Đang tạm dừng" })[String(value || "").toLowerCase()] || text(value, "Chưa có dữ liệu");
+  }
+
+  function setField(id, value) { if (elements[id]) elements[id].textContent = text(value, "Chưa có dữ liệu"); }
+  function percentage(value) { return `${Math.max(0, Math.min(100, number(value))).toFixed(1)}%`; }
+
+  function renderStatus(payload) {
+    const snapshot = get(payload, "host", "Host") || payload || {};
+    state.status = snapshot;
+    state.started = Boolean(get(snapshot, "isRunning", "IsRunning")) || ["running", "writing", "reviewing", "rewriting", "polishing"].includes(String(get(snapshot, "runtimeState", "RuntimeState")).toLowerCase());
+    const runtime = stateLabel(get(snapshot, "runtimeState", "RuntimeState"));
+    setField("statusText", text(get(snapshot, "statusLabel", "StatusLabel"), runtime));
+    setField("statusPhase", get(snapshot, "phase", "Phase"));
+    setField("statusThread", get(snapshot, "flow", "Flow"));
+    setField("statusModel", get(snapshot, "modelName", "ModelName"));
+    const current = number(get(snapshot, "currentChapter", "CurrentChapter"));
+    const total = number(get(snapshot, "totalChapters", "TotalChapters"));
+    setField("statusProgress", total ? `${current}/${total}` : current || "Chưa có dữ liệu");
+    setField("statusProvider", get(snapshot, "provider", "Provider"));
+    setField("statusModelDetail", `${text(get(snapshot, "modelName", "ModelName"))} · ${formatNumber(get(snapshot, "modelContextWindow", "ModelContextWindow"))} token`);
+    setField("statusStyle", get(snapshot, "style", "Style"));
+    setField("statusConnection", "Đã kết nối");
+    const agents = get(snapshot, "agents", "Agents");
+    const active = Array.isArray(agents) ? agents.find((agent) => String(get(agent, "state", "State")).toLowerCase() !== "idle") || agents[0] : null;
+    setField("statusAgent", active ? `${text(get(active, "name", "Name"))} · ${stateLabel(get(active, "state", "State"))}` : "Không có");
+    setField("statusTool", active ? get(active, "tool", "Tool") : "Không có");
+    setField("statusChapter", total ? `${current}/${total} · ${formatNumber(get(snapshot, "totalWordCount", "TotalWordCount"))} từ` : "Chưa có dữ liệu");
+    const contextWindow = get(snapshot, "contextWindow", "ContextWindow");
+    setField("statusContext", `${formatNumber(get(snapshot, "contextTokens", "ContextTokens"))}/${formatNumber(contextWindow)} token`);
+    setField("statusContextUsed", percentage(get(snapshot, "contextPercent", "ContextPercent")));
+    setField("statusWritingStyle", get(snapshot, "style", "Style"));
+    setField("statusUsage", `vào ${formatNumber(get(snapshot, "totalInputTokens", "TotalInputTokens"))} · ra ${formatNumber(get(snapshot, "totalOutputTokens", "TotalOutputTokens"))}`);
+    setField("statusCost", `${formatMoney(get(snapshot, "totalCostUSD", "TotalCostUSD"))} · tiết kiệm ${formatMoney(get(snapshot, "totalSavedUSD", "TotalSavedUSD"))}`);
+    setField("statusBudget", number(get(snapshot, "budgetLimitUSD", "BudgetLimitUSD")) ? formatMoney(get(snapshot, "budgetLimitUSD", "BudgetLimitUSD")) : "Chưa bật");
+    setField("statusCache", get(snapshot, "overallCacheCapable", "OverallCacheCapable") ? "Có hỗ trợ" : "Chưa hỗ trợ");
+    setField("statusCacheRead", formatNumber(get(snapshot, "totalCacheReadTokens", "TotalCacheReadTokens")));
+    setField("statusCacheWrite", formatNumber(get(snapshot, "totalCacheWriteTokens", "TotalCacheWriteTokens")));
+    const rewrites = get(snapshot, "pendingRewrites", "PendingRewrites");
+    setField("statusRewrites", Array.isArray(rewrites) && rewrites.length ? rewrites.join(", ") : "Không có");
+    setField("statusSteer", get(snapshot, "pendingSteer", "PendingSteer") || "Không có");
+    const recovery = text(get(snapshot, "recoveryLabel", "RecoveryLabel"));
+    setField("statusRecovery", recovery || "Không có");
+    setField("progressText", total ? `${current}/${total} chương · ${formatNumber(get(snapshot, "completedCount", "CompletedCount"))} hoàn tất` : runtime);
+    elements.progressBar.style.width = total ? `${Math.min(100, (current / total) * 100)}%` : "0%";
+    elements.resumeButton.hidden = !recovery;
+    elements.pauseButton.hidden = !state.started;
+    elements.resumeButton.textContent = recovery ? "Tiếp tục khôi phục" : "Tiếp tục";
+    if (recovery) addRecoveryNotice(recovery);
+  }
+
+  let recoveryNotice = false;
+  function addRecoveryNotice(label) {
+    if (recoveryNotice) return;
+    recoveryNotice = true;
+    state.messages.push({ kind: "event", author: "Máy chủ", label: "Khôi phục", markdown: `Đã tìm thấy tiến độ đã lưu: **${label}**. Bạn có thể tiếp tục khôi phục.` });
+    renderChat();
+  }
+
+  async function refreshStatus() {
+    const request = ++state.statusRequest;
+    try {
+      const payload = await requestJSON("/status");
+      if (request === state.statusRequest) renderStatus(payload);
+    } catch (error) { if (request === state.statusRequest) setError(formatError(error, "Không thể tải trạng thái máy chủ.")); }
+  }
+
+  function toggleDetails(force) {
+    state.detailsOpen = force === undefined ? !state.detailsOpen : force;
+    elements.statusDetails.hidden = !state.detailsOpen;
+    elements.statusDetailsToggle.setAttribute("aria-expanded", String(state.detailsOpen));
+  }
+
+  function renderPalette() {
+    const query = elements.composerInput.value.trim().toLowerCase();
+    if (!query.startsWith("/")) { elements.commandPalette.hidden = true; return; }
+    const name = query.slice(1).split(/\s/)[0];
+    const filtered = commands.filter((command) => !name || command.name.startsWith(name));
+    elements.commandList.replaceChildren();
+    filtered.forEach((command, index) => {
+      const item = document.createElement("li");
+      item.className = "command-entry";
+      const button = document.createElement("button");
+      button.type = "button";
+      const code = document.createElement("code"); code.textContent = command.usage;
+      const description = document.createElement("span"); description.textContent = command.description;
+      button.append(code, description);
+      button.addEventListener("click", () => selectCommand(command));
+      item.appendChild(button); elements.commandList.appendChild(item);
+      if (index === state.commandIndex) button.setAttribute("aria-current", "true");
+    });
+    state.commandItems = filtered;
+    state.commandIndex = Math.min(state.commandIndex, Math.max(0, filtered.length - 1));
+    elements.commandPalette.hidden = filtered.length === 0;
+  }
+
+  function selectCommand(command) {
+    elements.commandPalette.hidden = true;
+    if (command.name === "model") { elements.composerInput.value = "/model "; openModelPanel(); return; }
+    elements.composerInput.value = command.name === "import" || command.name === "export" ? `${command.usage.split(" ")[0]} ` : command.usage;
+    elements.composerInput.focus();
+  }
+
+  async function openModelPanel() {
+    elements.modelPanel.hidden = false;
+    await loadModels(elements.roleSelector.value || "default");
+  }
+
+  async function loadModels(role) {
+    try {
+      const payload = await requestJSON(`/models?role=${encodeURIComponent(role)}`);
+      const list = get(payload, "roles", "Roles");
+      if (Array.isArray(list)) {
+        elements.roleSelector.replaceChildren();
+        list.forEach((item) => { const option = document.createElement("option"); option.value = item; option.textContent = ({ default: "Mặc định", coordinator: "Điều phối viên", architect: "Kiến trúc sư", writer: "Người viết", editor: "Biên tập viên" })[item] || item; elements.roleSelector.appendChild(option); });
+        elements.roleSelector.value = role;
+      }
+      elements.providerSelector.replaceChildren();
+      const providers = get(payload, "providers", "Providers");
+      state.modelProviders = Array.isArray(providers) ? providers : [];
+      (Array.isArray(providers) ? providers : []).forEach((provider) => { const option = document.createElement("option"); option.value = text(get(provider, "provider", "Provider")); option.textContent = option.value; elements.providerSelector.appendChild(option); });
+      populateModels();
+      const current = get(payload, "current", "Current") || {};
+      elements.providerSelector.value = text(get(current, "provider", "Provider"), elements.providerSelector.value);
+      populateModels();
+      elements.modelSelector.value = text(get(current, "model", "Model"), elements.modelSelector.value);
+    } catch (error) { setError(formatError(error, "Không thể tải danh mục mô hình.")); }
+  }
+
+  function populateModels() {
+    const provider = elements.providerSelector.value;
+    const providers = state.modelProviders || [];
+    const item = providers.find((value) => text(get(value, "provider", "Provider")) === provider);
+    elements.modelSelector.replaceChildren();
+    (item && Array.isArray(get(item, "models", "Models")) ? get(item, "models", "Models") : []).forEach((model) => { const option = document.createElement("option"); option.value = model; option.textContent = model; elements.modelSelector.appendChild(option); });
+  }
+
+  async function submitModel(event) {
+    event.preventDefault();
+    const role = elements.roleSelector.value || "default";
+    const slash = role === "default" ? "/model" : `/model ${role}`;
+    await postCommand(slash, { provider: elements.providerSelector.value, model: elements.modelSelector.value });
+    elements.modelPanel.hidden = true;
+  }
+
+  async function postCommand(command, extra = {}) {
+    addUserMessage(command);
+    try { await requestJSON("/commands", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "command", text: command, ...extra }) }); setError(""); }
+    catch (error) { setError(formatError(error, "Không thể thực hiện lệnh.")); }
+  }
+
+  async function postInternal(action, value) {
+    try { await requestJSON("/commands", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, text: value }) }); setError(""); }
+    catch (error) { setError(formatError(error, "Không thể thực hiện thao tác.")); }
+  }
+
+  async function submitComposer(event) {
+    event.preventDefault();
+    const value = elements.composerInput.value.trim();
+    if (!value) return;
+    elements.composerInput.value = "";
+    elements.commandPalette.hidden = true;
+    if (value.startsWith("/")) {
+      if (value.toLowerCase().startsWith("/model")) { elements.composerInput.value = `${value.slice(6).trim() ? value : "/model "}`; await openModelPanel(); return; }
+      await postCommand(value); return;
     }
-    const eventsURL = lastEventID === null ? "/events" : `/events?after=${encodeURIComponent(lastEventID)}`;
-    eventSource = new EventSource(eventsURL);
-    eventSource.addEventListener("open", () => setServerError(""));
-    eventSource.addEventListener("stream_delta", (event) => {
-      rememberEventID(event);
-      try {
-        const payload = parseEvent(event);
-        const text = field(payload, "text", "Text");
-        if (typeof text === "string") {
-          elements.stream.textContent += text;
-        }
-      } catch (error) {
-        setServerError(error.message);
-      }
-    });
-    eventSource.addEventListener("stream_clear", (event) => {
-      rememberEventID(event);
-      elements.stream.textContent = "";
-    });
-    eventSource.addEventListener("host_event", (event) => {
-      rememberEventID(event);
-      try {
-        updateStatusFromEvent(parseEvent(event));
-      } catch (error) {
-        setServerError(error.message);
-      }
-    });
-    eventSource.addEventListener("terminal", (event) => {
-      rememberEventID(event);
-      try {
-        updateStatusFromEvent(parseEvent(event));
-      } catch (error) {
-        setServerError(error.message);
-      }
-    });
-    eventSource.addEventListener("question", handleQuestion);
-    eventSource.addEventListener("runtime_replay", rememberEventID);
-    eventSource.addEventListener("reset", (event) => {
-      rememberEventID(event);
-      void refreshStatus();
-    });
-    eventSource.addEventListener("heartbeat", rememberEventID);
-    eventSource.addEventListener("error", () => {
-      setServerError("The live event stream is disconnected; retrying…");
-    });
+    addUserMessage(value);
+    const action = state.coCreateActive ? "cocreate_message" : !state.started ? "start" : state.status && ["paused", "completed", "idle"].includes(String(get(state.status, "runtimeState", "RuntimeState")).toLowerCase()) ? "continue" : "steer";
+    const body = { action, text: value };
+    if (action === "start") body.mode = elements.startupMode.value || "quick";
+    try { await requestJSON("/commands", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); setError(""); }
+    catch (error) { setError(formatError(error, "Không thể gửi yêu cầu.")); }
   }
 
-  function wireForm(formID, textareaID, action) {
-    document.getElementById(formID).addEventListener("submit", (event) => {
-      event.preventDefault();
-      const textarea = document.getElementById(textareaID);
-      void sendCommand(action, textarea.value);
+  function renderQuestion(frame) {
+    const id = text(get(frame, "id", "ID"));
+    const questions = get(frame, "questions", "Questions");
+    if (!id || !Array.isArray(questions)) { setError("Câu hỏi từ máy chủ không hợp lệ."); return; }
+    state.pendingQuestion = { id, questions };
+    elements.questionItems.replaceChildren();
+    questions.forEach((question, index) => {
+      const fieldset = document.createElement("fieldset");
+      const legend = document.createElement("legend"); legend.textContent = text(get(question, "header", "Header"), `Câu hỏi ${index + 1}`) + `: ${text(get(question, "question", "Question"))}`; fieldset.appendChild(legend);
+      const options = get(question, "options", "Options");
+      (Array.isArray(options) ? options : []).forEach((item) => { const label = document.createElement("label"); label.className = "choice"; const input = document.createElement("input"); input.type = get(question, "multiSelect", "MultiSelect") ? "checkbox" : "radio"; input.name = `question-${index}`; input.value = text(get(item, "label", "Label")); label.append(input); const copy = document.createElement("span"); copy.textContent = text(get(item, "label", "Label")) + (get(item, "description", "Description") ? ` — ${get(item, "description", "Description")}` : ""); label.appendChild(copy); fieldset.appendChild(label); });
+      const custom = document.createElement("label"); custom.className = "custom-answer"; custom.textContent = "Câu trả lời khác (không bắt buộc)"; const input = document.createElement("input"); input.type = "text"; input.dataset.custom = String(index); input.placeholder = "Nhập câu trả lời của bạn"; custom.appendChild(input); fieldset.appendChild(custom); elements.questionItems.appendChild(fieldset);
     });
+    elements.question.hidden = false;
   }
 
-  function start() {
-    elements.serverError = document.getElementById("server-error");
-    elements.statusText = document.getElementById("status-text");
-    elements.stream = document.getElementById("stream");
-    elements.question = document.getElementById("question");
-    elements.questionItems = document.getElementById("question-items");
-    elements.questionError = document.getElementById("question-error");
-
-    wireForm("start-form", "start-text", "start");
-    wireForm("steer-form", "steer-text", "steer");
-    wireForm("continue-form", "continue-text", "continue");
-    document.getElementById("pause-button").addEventListener("click", () => {
-      void sendCommand("pause", "");
-    });
-    document.getElementById("reconnect-button").addEventListener("click", connectEvents);
-    document.getElementById("question-form").addEventListener("submit", answerQuestion);
-
-    void refreshStatus();
-    connectEvents();
+  async function answerQuestion(event) {
+    event.preventDefault(); if (!state.pendingQuestion) return;
+    const answers = {}; const notes = {}; let invalid = false;
+    state.pendingQuestion.questions.forEach((question, index) => { const key = text(get(question, "question", "Question")); const selected = [...elements.questionItems.querySelectorAll(`input[name="question-${index}"]:checked`)].map((item) => item.value); const custom = elements.questionItems.querySelector(`input[data-custom="${index}"]`); if (custom && custom.value.trim()) selected.push(custom.value.trim()); if (!selected.length) invalid = true; else answers[key] = selected.join(", "); if (custom && custom.value.trim()) notes[key] = custom.value.trim(); });
+    if (invalid) { elements.questionError.textContent = "Bạn hãy trả lời tất cả câu hỏi."; return; }
+    try { await requestJSON(`/questions/${encodeURIComponent(state.pendingQuestion.id)}/answer`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ answers, notes }) }); state.pendingQuestion = null; elements.question.hidden = true; elements.questionError.textContent = ""; } catch (error) { elements.questionError.textContent = formatError(error, "Không thể gửi lựa chọn."); }
   }
 
-  document.addEventListener("DOMContentLoaded", start);
+  function bind() {
+    elements.transcript = document.getElementById("transcript"); elements.serverError = document.getElementById("server-error"); elements.statusText = document.getElementById("status-text"); elements.statusPhase = document.getElementById("status-phase"); elements.statusThread = document.getElementById("status-thread"); elements.statusModel = document.getElementById("status-model"); elements.statusProgress = document.getElementById("status-progress"); elements.statusDetails = document.getElementById("status-details"); elements.statusDetailsToggle = document.getElementById("status-details-toggle"); elements.progressText = document.getElementById("progress-text"); elements.progressBar = document.getElementById("progress-bar"); elements.resumeButton = document.getElementById("resume-button"); elements.pauseButton = document.getElementById("pause-button"); elements.reconnectButton = document.getElementById("reconnect-button"); elements.question = document.getElementById("question"); elements.questionItems = document.getElementById("question-items"); elements.questionError = document.getElementById("question-error"); elements.questionForm = document.getElementById("question-form"); elements.composerForm = document.getElementById("composer-form"); elements.composerInput = document.getElementById("composer-input"); elements.commandPalette = document.getElementById("command-palette"); elements.commandList = document.querySelector("#command-palette .command-list"); elements.startupMode = document.getElementById("startup-mode"); elements.modelPanel = document.getElementById("model-panel"); elements.roleSelector = document.getElementById("role-selector"); elements.providerSelector = document.getElementById("provider-selector"); elements.modelSelector = document.getElementById("model-selector"); elements.modelPanelClose = document.getElementById("model-panel-close"); elements.statusDetailsToggle.addEventListener("click", () => toggleDetails());
+    renderChat();
+    const modelApply = document.createElement("button"); modelApply.type = "button"; modelApply.textContent = "Áp dụng mô hình"; modelApply.addEventListener("click", submitModel); elements.modelPanel.querySelector(".selector-stack").appendChild(modelApply);
+    elements.composerForm.addEventListener("submit", submitComposer); elements.questionForm.addEventListener("submit", answerQuestion); document.getElementById("command-button").addEventListener("click", renderPalette); document.getElementById("model-panel-close").addEventListener("click", () => { elements.modelPanel.hidden = true; }); elements.roleSelector.addEventListener("change", () => loadModels(elements.roleSelector.value)); elements.providerSelector.addEventListener("change", populateModels); elements.reconnectButton.addEventListener("click", connectEvents); elements.pauseButton.addEventListener("click", () => postInternal("pause", "")); elements.resumeButton.addEventListener("click", () => postInternal("resume", ""));
+    elements.composerInput.addEventListener("input", renderPalette); elements.composerInput.addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); elements.composerForm.requestSubmit(); } else if (event.key === "Tab") { event.preventDefault(); elements.startupMode.value = elements.startupMode.value === "quick" ? "cocreate" : "quick"; } else if (event.key === "Escape") { elements.composerInput.value = ""; elements.commandPalette.hidden = true; elements.modelPanel.hidden = true; toggleDetails(false); } });
+    refreshStatus(); connectEvents(); state.statusTimer = window.setInterval(refreshStatus, 3000); window.addEventListener("beforeunload", () => { if (state.statusTimer) clearInterval(state.statusTimer); if (state.eventSource) state.eventSource.close(); });
+  }
+
+  document.addEventListener("DOMContentLoaded", bind);
 })();
