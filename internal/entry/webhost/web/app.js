@@ -87,6 +87,7 @@
   };
   let latestStatusRequestID = 0;
   let questionRevision = 0;
+  const welcomeMessage = "Sẵn sàng đồng hành cùng bạn. Hãy mô tả ý tưởng, nhân vật hoặc cảnh mở đầu để bắt đầu.";
   let lastEventID = null;
   const state = {
     messages: [{ kind: "assistant", text: welcomeMessage }],
@@ -132,7 +133,6 @@
     });
     return formatted.join(" · ") + (value.length > 6 ? " · …" : "");
   };
-  const welcomeMessage = "Sẵn sàng đồng hành cùng bạn. Hãy mô tả ý tưởng, nhân vật hoặc cảnh mở đầu để bắt đầu.";
   const formatError = (error, fallback = "Đã xảy ra lỗi.") => error && error.message ? error.message : fallback;
   const translate = (value, labels, fallback = "Chưa có dữ liệu") => {
     const key = String(value || "").trim().toLowerCase();
@@ -630,7 +630,7 @@
           setError("lệnh /model chỉ nhận tối đa một vai trò");
           return;
         }
-        const role = modelArgs[0] || "default";
+        const role = (modelArgs[0] || "default").toLowerCase();
         elements.composerInput.value = role === "default" ? "/model " : `/model ${role}`;
         await openModelPanel(role);
         return;

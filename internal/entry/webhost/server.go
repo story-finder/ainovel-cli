@@ -111,6 +111,9 @@ func newServer(rt runtime, replayLimit int) *server {
 	commandCtx, commandCancel := context.WithCancel(context.Background())
 	nextEventID := int64(0)
 	if items, err := rt.ReplayQueue(0); err == nil {
+		// Runtime queue sequence numbers survive a host restart. Start the in-memory
+		// SSE cursor above that durable high-water mark so a stale browser cursor
+		// cannot overlap the replay frames emitted by this process.
 		for _, item := range items {
 			if item.Seq > nextEventID {
 				nextEventID = item.Seq

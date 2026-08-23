@@ -460,6 +460,18 @@ func TestStatusReturnsExistingHostSnapshot(t *testing.T) {
 	}
 }
 
+func TestServerSeedsSSECursorAfterPersistedRuntimeSequence(t *testing.T) {
+	rt := newFakeRuntime()
+	rt.replay = []domain.RuntimeQueueItem{{Seq: 42, Kind: domain.RuntimeQueueUIEvent, Summary: "đã lưu"}}
+	app := newServer(rt, 8)
+	t.Cleanup(app.Close)
+
+	frame := waitForFrame(t, app.hub, "runtime_replay")
+	if frame.ID <= 42 {
+		t.Fatalf("runtime replay frame ID = %d, want > persisted sequence 42", frame.ID)
+	}
+}
+
 func TestStatusIncludesStableCoCreateState(t *testing.T) {
 	rt := newFakeRuntime()
 	app := newServer(rt, 8)
@@ -576,6 +588,7 @@ func TestWebAppOpensModelPickerOnlyForExactCommand(t *testing.T) {
 		`const modelArgs = (modelCommand[1] || "").trim().split(/\s+/).filter(Boolean);`,
 		`if (modelArgs.length > 1) {`,
 		`lệnh /model chỉ nhận tối đa một vai trò`,
+		`const role = (modelArgs[0] || "default").toLowerCase();`,
 		`await openModelPanel(role);`,
 	} {
 		if !strings.Contains(content, want) {

@@ -139,6 +139,9 @@ func TestAppMakesCustomAnswersExclusiveForSingleSelect(t *testing.T) {
 
 func TestAppRendersUISnapshotDiagnosticsAndRuntimeReplay(t *testing.T) {
 	content := embeddedAppJS(t)
+	if strings.Index(content, `const welcomeMessage =`) > strings.Index(content, `const state =`) {
+		t.Fatal("web/app.js uses welcomeMessage before declaring it")
+	}
 	for _, want := range []string{
 		`get(snapshot, "contextStrategy", "ContextStrategy")`,
 		`get(snapshot, "contextCompactedCount", "ContextCompactedCount")`,
