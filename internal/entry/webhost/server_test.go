@@ -593,6 +593,25 @@ func TestCommandModelUsesSelectedProviderAndModel(t *testing.T) {
 	}
 }
 
+func TestCommandModelWithoutRoleUsesDefault(t *testing.T) {
+	rt := newFakeRuntimeWithCommandCapabilities()
+	app := newServer(rt, 8)
+	t.Cleanup(app.Close)
+
+	response := serveAppJSON(t, app, http.MethodPost, "/commands", map[string]any{
+		"action": "command", "text": "/model",
+		"provider": "openrouter", "model": "google/gemini-2.5-pro",
+	})
+	assertRecorderJSONOK(t, response, http.StatusOK)
+
+	rt.mu.Lock()
+	role, provider, model := rt.switchedRole, rt.switchedProvider, rt.switchedModel
+	rt.mu.Unlock()
+	if role != "default" || provider != "openrouter" || model != "google/gemini-2.5-pro" {
+		t.Fatalf("default model switch = %q/%q/%q", role, provider, model)
+	}
+}
+
 func TestCommandModelPublishesVietnameseResult(t *testing.T) {
 	app := newServer(newFakeRuntimeWithCommandCapabilities(), 8)
 	t.Cleanup(app.Close)
@@ -630,8 +649,8 @@ func TestCommandModelRejectsInvalidRoleAndMissingSelectors(t *testing.T) {
 			want: "vai trò",
 		},
 		{
-			name: "missing role",
-			body: map[string]any{"action": "command", "text": "/model", "provider": "openrouter", "model": "model"},
+			name: "too many roles",
+			body: map[string]any{"action": "command", "text": "/model writer editor", "provider": "openrouter", "model": "model"},
 			want: "vai trò",
 		},
 		{

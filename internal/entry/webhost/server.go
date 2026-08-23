@@ -435,12 +435,16 @@ func (s *server) handleWebCommand(text, provider, model string) (bool, error) {
 	}
 	switch command.Name {
 	case "model":
-		if len(command.Args) != 1 {
-			return false, errors.New("lệnh /model cần đúng một vai trò")
+		if len(command.Args) > 1 {
+			return false, errors.New("lệnh /model chỉ nhận tối đa một vai trò")
 		}
-		role, ok := normalizeWebModelRole(command.Args[0])
+		roleArg := ""
+		if len(command.Args) == 1 {
+			roleArg = command.Args[0]
+		}
+		role, ok := normalizeWebModelRole(roleArg)
 		if !ok {
-			return false, fmt.Errorf("vai trò không hợp lệ %q; chọn default, coordinator, architect, writer hoặc editor", command.Args[0])
+			return false, fmt.Errorf("vai trò không hợp lệ %q; chọn default, coordinator, architect, writer hoặc editor", roleArg)
 		}
 		provider = strings.TrimSpace(provider)
 		model = strings.TrimSpace(model)
