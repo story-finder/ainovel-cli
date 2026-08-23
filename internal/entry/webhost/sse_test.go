@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -451,5 +452,41 @@ func TestSSEStaleLastEventIDEmitsReset(t *testing.T) {
 	got := client.Next(t)
 	if got.Event != "reset" {
 		t.Fatalf("event = %q, want reset", got.Event)
+	}
+}
+
+func TestSSEReplaysCommandResultFrameFields(t *testing.T) {
+	rt := newFakeRuntime()
+	app := newServer(rt, 8)
+	t.Cleanup(app.Close)
+
+	progress := app.hub.publish("command_progress", commandProgressFrame{
+		Command: "import",
+		Text:    "Đang nhập chương",
+		Stage:   "chapter",
+		Current: 2,
+		Total:   4,
+		Level:   "info",
+	})
+	result := app.hub.publish("command_result", commandResultFrame{
+		Command:     "import",
+		Markdown:    "Đã nhập",
+		Ready:       false,
+		Suggestions: []string{"Tiếp tục"},
+		Level:       "success",
+		Done:        true,
+	})
+
+	client := openSSE(t, app.Handler(), strconv.FormatInt(progress.ID, 10))
+	got := client.Next(t)
+	if got.Event != "command_result" || got.ID != result.ID {
+		t.Fatalf("replayed command frame = (%s, %d), want command_result/%d", got.Event, got.ID, result.ID)
+	}
+	var payload commandResultFrame
+	if err := json.Unmarshal(got.Data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Command != "import" || payload.Markdown != "Đã nhập" || !reflect.DeepEqual(payload.Suggestions, []string{"Tiếp tục"}) || payload.Level != "success" || !payload.Done {
+		t.Fatalf("replayed command payload = %#v", payload)
 	}
 }

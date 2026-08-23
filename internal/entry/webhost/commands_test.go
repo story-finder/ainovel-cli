@@ -1,8 +1,13 @@
 package webhost
 
 import (
+	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/voocel/ainovel-cli/internal/host/exp"
+	"github.com/voocel/ainovel-cli/internal/host/imp"
 )
 
 func TestWebCommandCatalogMatchesApprovedTUICommands(t *testing.T) {
@@ -98,5 +103,117 @@ func TestParseSlashCommandRejectsInvalidWebCommands(t *testing.T) {
 				t.Fatalf("parseSlashCommand(%q) unexpectedly succeeded", input)
 			}
 		})
+	}
+}
+
+func TestParseExportArgsMatchesTUISyntax(t *testing.T) {
+	got, err := parseExportArgs([]string{"novel.epub", "from=3", "to=8", "--overwrite"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := exp.Options{OutPath: "novel.epub", Format: "", From: 3, To: 8, Overwrite: true}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("export options = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseExportArgsRejectsTUIInvalidArguments(t *testing.T) {
+	for _, input := range [][]string{
+		{"from=-1"},
+		{"to=abc"},
+		{"format=txt"},
+		{"--force"},
+		{"one.txt", "two.txt"},
+	} {
+		t.Run(strings.Join(input, "_"), func(t *testing.T) {
+			if _, err := parseExportArgs(input); err == nil {
+				t.Fatalf("parseExportArgs(%q) unexpectedly succeeded", input)
+			}
+		})
+	}
+}
+
+func TestParseImportArgsMatchesTUISyntax(t *testing.T) {
+	got, err := parseImportArgs([]string{"story.md", "from=4"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := imp.Options{SourcePath: "story.md", ResumeFrom: 4}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("import options = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseImportArgsRejectsMissingOrUnknownArguments(t *testing.T) {
+	for _, input := range [][]string{
+		{},
+		{"story.md", "from=-1"},
+		{"story.md", "to=2"},
+		{"story.md", "4"},
+	} {
+		t.Run(strings.Join(input, "_"), func(t *testing.T) {
+			if _, err := parseImportArgs(input); err == nil {
+				t.Fatalf("parseImportArgs(%q) unexpectedly succeeded", input)
+			}
+		})
+	}
+}
+
+func TestCommandFramesHaveStableProgressAndResultFields(t *testing.T) {
+	progress, err := json.Marshal(commandProgressFrame{
+		Command: "import",
+		Text:    "Đang nhập",
+		Stage:   "chapter",
+		Current: 2,
+		Total:   5,
+		Level:   "info",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotProgress map[string]any
+	if err := json.Unmarshal(progress, &gotProgress); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]any{
+		"command": "import",
+		"text":    "Đang nhập",
+		"stage":   "chapter",
+		"current": float64(2),
+		"total":   float64(5),
+		"level":   "info",
+	} {
+		if gotProgress[key] != want {
+			t.Fatalf("progress[%q] = %#v, want %#v", key, gotProgress[key], want)
+		}
+	}
+
+	result, err := json.Marshal(commandResultFrame{
+		Command:     "cocreate",
+		Markdown:    "Kế hoạch",
+		Prompt:      "Viết tiếp",
+		Ready:       true,
+		Suggestions: []string{"Gợi ý"},
+		Level:       "success",
+		Done:        true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotResult map[string]any
+	if err := json.Unmarshal(result, &gotResult); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]any{
+		"command":  "cocreate",
+		"markdown": "Kế hoạch",
+		"prompt":   "Viết tiếp",
+		"ready":    true,
+		"level":    "success",
+		"done":     true,
+	} {
+		if gotResult[key] != want {
+			t.Fatalf("result[%q] = %#v, want %#v", key, gotResult[key], want)
+		}
 	}
 }
