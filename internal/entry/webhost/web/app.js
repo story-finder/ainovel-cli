@@ -89,7 +89,7 @@
   let questionRevision = 0;
   let lastEventID = null;
   const state = {
-    messages: [{ kind: "assistant", text: "Sẵn sàng đồng hành cùng bạn. Hãy mô tả ý tưởng, nhân vật hoặc cảnh mở đầu để bắt đầu." }],
+    messages: [{ kind: "assistant", text: welcomeMessage }],
     streamingIndex: -1,
     commandIndex: 0,
     pendingQuestion: null,
@@ -124,6 +124,15 @@
   const compactList = (value, limit = 8) => Array.isArray(value) && value.length
     ? value.slice(0, limit).map((item) => compact(item, 80)).join(" · ") + (value.length > limit ? " · …" : "")
     : "Chưa có dữ liệu";
+  const formatCacheStats = (value, fallback = "Chưa có dữ liệu") => {
+    if (!Array.isArray(value) || !value.length) return fallback;
+    const formatted = value.slice(0, 6).map((item) => {
+      const name = text(get(item, "role", "Role"), text(get(item, "model", "Model"), "không rõ"));
+      return `${name}: ${formatNumber(get(item, "cacheRead", "CacheRead"))}/${formatNumber(get(item, "input", "Input"))}`;
+    });
+    return formatted.join(" · ") + (value.length > 6 ? " · …" : "");
+  };
+  const welcomeMessage = "Sẵn sàng đồng hành cùng bạn. Hãy mô tả ý tưởng, nhân vật hoặc cảnh mở đầu để bắt đầu.";
   const formatError = (error, fallback = "Đã xảy ra lỗi.") => error && error.message ? error.message : fallback;
   const translate = (value, labels, fallback = "Chưa có dữ liệu") => {
     const key = String(value || "").trim().toLowerCase();
@@ -193,6 +202,12 @@
   function renderChat() {
     elements.transcript.replaceChildren(...state.messages.map(messageNode));
     elements.transcript.scrollTop = elements.transcript.scrollHeight;
+  }
+
+  function resetChatTranscript() {
+    state.messages = [{ kind: "assistant", text: welcomeMessage }];
+    state.streamingIndex = -1;
+    renderChat();
   }
 
   function addUserMessage(value) {
@@ -335,6 +350,8 @@
     onEvent("reset", () => {
       lastEventID = null;
       finishAssistant();
+      resetChatTranscript();
+      clearQuestionFrame();
       refreshStatus();
       connectEvents();
     });
@@ -378,9 +395,15 @@
     setField("statusNovel", get(snapshot, "novelName", "NovelName"));
     setField("statusVolumeArc", get(snapshot, "currentVolumeArc", "CurrentVolumeArc"));
     setField("statusNextVolume", get(snapshot, "nextVolumeTitle", "NextVolumeTitle"));
+    setField("statusLayered", get(snapshot, "layered", "Layered") ? "Có" : "Không");
+    const inProgressChapter = number(get(snapshot, "inProgressChapter", "InProgressChapter"));
+    setField("statusInProgress", inProgressChapter ? `Chương ${formatNumber(inProgressChapter)}` : "Không có");
     const outline = get(snapshot, "outline", "Outline");
     setField("statusOutline", Array.isArray(outline) && outline.length
       ? compactList(outline.map((item) => `Chương ${text(get(item, "chapter", "Chapter"))}: ${text(get(item, "title", "Title"))}`), 12)
+      : "Chưa có dữ liệu");
+    setField("statusOutlineCore", Array.isArray(outline) && outline.length
+      ? compactList(outline.map((item) => `Chương ${text(get(item, "chapter", "Chapter"))}: ${compact(get(item, "coreEvent", "CoreEvent"), 60)}`), 6)
       : "Chưa có dữ liệu");
     setField("statusCharacters", compactList(get(snapshot, "characters", "Characters")));
     setField("statusPremise", compact(get(snapshot, "premise", "Premise")));
@@ -407,6 +430,8 @@
     const active = Array.isArray(agents) ? agents.find((agent) => String(get(agent, "state", "State")).toLowerCase() !== "idle") || agents[0] : null;
     setField("statusAgent", active ? `${agentLabel(get(active, "name", "Name"))} · ${stateLabel(get(active, "state", "State"))}` : "Không có");
     setField("statusTool", active ? get(active, "tool", "Tool") : "Không có");
+    const agentContext = active ? get(active, "context", "Context") || {} : null;
+    setField("statusAgentContext", active ? `${formatNumber(get(agentContext, "tokens", "Tokens"))}/${formatNumber(get(agentContext, "contextWindow", "ContextWindow"))} token · ${percentage(get(agentContext, "percent", "Percent"))}` : "Không có");
     setField("statusChapter", total ? `${current}/${total} · ${formatNumber(get(snapshot, "totalWordCount", "TotalWordCount"))} từ` : "Chưa có dữ liệu");
     const contextWindow = get(snapshot, "contextWindow", "ContextWindow");
     setField("statusContext", `${formatNumber(get(snapshot, "contextTokens", "ContextTokens"))}/${formatNumber(contextWindow)} token`);
@@ -433,6 +458,8 @@
       ? `${((number(get(snapshot, "overallRecentCacheRead", "OverallRecentCacheRead")) / number(get(snapshot, "overallRecentInput", "OverallRecentInput"))) * 100).toFixed(1)}% hit`
       : "Chưa có dữ liệu";
     setField("statusCacheRecent", recentCacheSamples ? `${recentCacheRate} · ${recentCacheRead}/${recentInput} token · ${formatNumber(recentCacheSamples)} lượt` : "Chưa có dữ liệu");
+    setField("statusCacheByAgent", formatCacheStats(get(snapshot, "cachePerAgent", "CachePerAgent")));
+    setField("statusCacheByModel", formatCacheStats(get(snapshot, "cachePerModel", "CachePerModel")));
     const rewrites = get(snapshot, "pendingRewrites", "PendingRewrites");
     setField("statusRewrites", Array.isArray(rewrites) && rewrites.length ? rewrites.join(", ") : "Không có");
     setField("statusRewriteReason", get(snapshot, "rewriteReason", "RewriteReason"));
@@ -700,7 +727,10 @@
       statusConnection: "status-connection",
       statusVolumeArc: "status-volume-arc",
       statusNextVolume: "status-next-volume",
+      statusLayered: "status-layered",
+      statusInProgress: "status-in-progress",
       statusOutline: "status-outline",
+      statusOutlineCore: "status-outline-core",
       statusCharacters: "status-characters",
       statusPremise: "status-premise",
       statusSupporting: "status-supporting",
@@ -711,6 +741,7 @@
       statusLastReview: "status-last-review",
       statusAgent: "status-agent",
       statusTool: "status-tool",
+      statusAgentContext: "status-agent-context",
       statusChapter: "status-chapter",
       statusContext: "status-context",
       statusContextUsed: "status-context-used",
@@ -729,6 +760,8 @@
       statusCacheRead: "status-cache-read",
       statusCacheWrite: "status-cache-write",
       statusCacheRecent: "status-cache-recent",
+      statusCacheByAgent: "status-cache-by-agent",
+      statusCacheByModel: "status-cache-by-model",
       statusRewrites: "status-rewrites",
       statusRewriteReason: "status-rewrite-reason",
       statusSteer: "status-steer",

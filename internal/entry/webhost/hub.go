@@ -34,8 +34,13 @@ func (h *eventHub) nextIDLocked() int64 {
 }
 
 func newEventHub(limit int) *eventHub {
+	return newEventHubWithNextID(limit, 0)
+}
+
+func newEventHubWithNextID(limit int, nextID int64) *eventHub {
 	return &eventHub{
 		limit:   limit,
+		nextID:  nextID,
 		clients: make(map[chan frame]struct{}),
 	}
 }

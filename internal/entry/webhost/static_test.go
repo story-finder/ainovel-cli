@@ -111,6 +111,7 @@ func TestAppReconnectsFromLatestEventCursor(t *testing.T) {
 	for _, want := range []string{
 		`let lastEventID = null;`,
 		`lastEventID = null;`,
+		`resetChatTranscript();`,
 		`event.lastEventId`,
 		`/events?after=`,
 		`eventSource.addEventListener("heartbeat", rememberEventID);`,
@@ -149,6 +150,10 @@ func TestAppRendersUISnapshotDiagnosticsAndRuntimeReplay(t *testing.T) {
 		`get(snapshot, "premise", "Premise")`,
 		`get(snapshot, "supportingCount", "SupportingCount")`,
 		`get(snapshot, "recentSummaries", "RecentSummaries")`,
+		`get(snapshot, "layered", "Layered")`,
+		`get(snapshot, "inProgressChapter", "InProgressChapter")`,
+		`get(snapshot, "cachePerAgent", "CachePerAgent")`,
+		`get(snapshot, "cachePerModel", "CachePerModel")`,
 		`kind === "ui_event"`,
 		`addEventMessage(`,
 	} {
@@ -170,9 +175,29 @@ func TestAppRendersUISnapshotDiagnosticsAndRuntimeReplay(t *testing.T) {
 		`id="status-supporting"`,
 		`id="status-compass"`,
 		`id="status-summaries"`,
+		`id="status-layered"`,
+		`id="status-outline-core"`,
+		`id="status-cache-by-agent"`,
+		`id="status-cache-by-model"`,
+		`id="status-agent-context"`,
 	} {
 		if !strings.Contains(index, want) {
 			t.Fatalf("web/index.html does not contain snapshot field %q", want)
+		}
+	}
+}
+
+func TestAssistantResultsAreNotRenderedAsUserBubbles(t *testing.T) {
+	content := embeddedCSS(t)
+	for _, want := range []string{
+		`.message-result {`,
+		`border: 0;`,
+		`background: transparent;`,
+		`.message-user {`,
+		`max-width: min(75%, 42rem);`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("web/app.css does not contain full-width response assertion %q", want)
 		}
 	}
 }
@@ -193,6 +218,15 @@ func embeddedIndexHTML(t *testing.T) string {
 		t.Fatalf("read embedded web/index.html: %v", err)
 	}
 	return string(index)
+}
+
+func embeddedCSS(t *testing.T) string {
+	t.Helper()
+	css, err := webFS.ReadFile("web/app.css")
+	if err != nil {
+		t.Fatalf("read embedded web/app.css: %v", err)
+	}
+	return string(css)
 }
 
 func embeddedMarkdownJS(t *testing.T) string {

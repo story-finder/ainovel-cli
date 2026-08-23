@@ -483,10 +483,11 @@ select:focus {
 }
 
 .message-result {
-  border: 1px solid var(--border);
-  border-radius: 0.55rem;
-  background: var(--panel);
-  padding: 0.85rem;
+  border: 0;
+  border-left: 2px solid var(--accent);
+  border-radius: 0;
+  background: transparent;
+  padding: 1rem 0 1rem 0.85rem;
 }
 
 .message-user {

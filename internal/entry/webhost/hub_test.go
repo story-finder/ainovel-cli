@@ -60,6 +60,14 @@ func TestHubRequestsResetWhenLastIDBelongsToPreviousProcess(t *testing.T) {
 	}
 }
 
+func TestHubStartsAfterPersistedRuntimeSequence(t *testing.T) {
+	hub := newEventHubWithNextID(8, 42)
+	frame := hub.publish("runtime_replay", "new")
+	if frame.ID != 43 {
+		t.Fatalf("frame ID = %d, want 43", frame.ID)
+	}
+}
+
 func TestHubFansOutWithoutBlockingPublisher(t *testing.T) {
 	hub := newEventHub(8)
 	first := hub.subscribe(0)

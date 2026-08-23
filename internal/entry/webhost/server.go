@@ -109,10 +109,18 @@ type server struct {
 
 func newServer(rt runtime, replayLimit int) *server {
 	commandCtx, commandCancel := context.WithCancel(context.Background())
+	nextEventID := int64(0)
+	if items, err := rt.ReplayQueue(0); err == nil {
+		for _, item := range items {
+			if item.Seq > nextEventID {
+				nextEventID = item.Seq
+			}
+		}
+	}
 	s := &server{
 		rt:            rt,
 		mux:           http.NewServeMux(),
-		hub:           newEventHub(replayLimit),
+		hub:           newEventHubWithNextID(replayLimit, nextEventID),
 		commandCtx:    commandCtx,
 		commandCancel: commandCancel,
 	}
