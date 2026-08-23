@@ -116,7 +116,8 @@ Mở trình duyệt tại `http://<LAN-IP>:8080`.
 
 ```bash
 docker compose stop
-docker compose run --rm --entrypoint ainovel-cli ainovel
+docker compose run --rm --entrypoint ainovel-cli ainovel \
+  --config /root/.ainovel/config.json
 ```
 
 > Never run the TUI concurrently against the same workspace. Không bao giờ chạy TUI đồng thời với web host trên cùng một thư mục `workspace`.
@@ -126,6 +127,7 @@ docker compose run --rm --entrypoint ainovel-cli ainovel
 ```bash
 docker compose stop
 docker compose run --rm --entrypoint ainovel-cli ainovel \
+  --config /root/.ainovel/config.json \
   --headless --prompt "Viết tiểu thuyết cung đấu, nhân vật chính là cô lao công xuất thân thấp kém"
 ```
 
@@ -466,7 +468,7 @@ Remove-Item -Recurse -Force workspace\output\
 **Giải pháp**: Rebuild Docker image sau khi pull phiên bản mới nhất:
 ```bash
 git pull
-docker build -t ainovel-cli-vi . --no-cache
+docker compose build --no-cache
 ```
 
 ---

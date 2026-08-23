@@ -58,7 +58,8 @@ Stop the web host before using the legacy TUI, and start it again afterward:
 
 ```bash
 docker compose stop
-docker compose run --rm --entrypoint ainovel-cli ainovel
+docker compose run --rm --entrypoint ainovel-cli ainovel \
+  --config /root/.ainovel/config.json
 docker compose up --build
 ```
 
