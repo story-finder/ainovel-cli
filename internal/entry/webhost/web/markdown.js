@@ -15,6 +15,8 @@
     "'": "&#39;",
   };
   const MAX_BLOCKQUOTE_DEPTH = 64;
+  const MAX_INLINE_DEPTH = 64;
+  const MAX_INLINE_SCAN = 2048;
 
   function escapeHTML(value) {
     return String(value).replace(/[&<>"']/g, (character) => HTML_ESCAPES[character]);
@@ -44,7 +46,8 @@
 
   function findClosingBracket(value, start) {
     let depth = 0;
-    for (let index = start; index < value.length; index += 1) {
+    const limit = Math.min(value.length, start + MAX_INLINE_SCAN);
+    for (let index = start; index < limit; index += 1) {
       if (value[index] === "[") {
         depth += 1;
       } else if (value[index] === "]") {
@@ -59,7 +62,8 @@
 
   function findClosingParenthesis(value, start) {
     let depth = 0;
-    for (let index = start; index < value.length; index += 1) {
+    const limit = Math.min(value.length, start + MAX_INLINE_SCAN);
+    for (let index = start; index < limit; index += 1) {
       if (value[index] === "(") {
         depth += 1;
       } else if (value[index] === ")") {
@@ -81,7 +85,7 @@
     return separator < 0 ? destination : destination.slice(0, separator);
   }
 
-  function parseLink(value, start) {
+  function parseLink(value, start, depth) {
     const labelEnd = findClosingBracket(value, start + 1);
     if (labelEnd < 0 || value[labelEnd + 1] !== "(") {
       return null;
@@ -94,7 +98,7 @@
 
     const destination = linkDestination(value.slice(labelEnd + 2, close));
     const href = sanitizeHref(destination);
-    const label = renderInline(value.slice(start + 1, labelEnd));
+    const label = renderInline(value.slice(start + 1, labelEnd), depth + 1);
     return {
       html: href === null ? label : `<a href="${escapeHTML(href)}">${label}</a>`,
       end: close + 1,
@@ -109,7 +113,7 @@
     return end;
   }
 
-  function renderDelimited(value, start, marker, tag) {
+  function renderDelimited(value, start, marker, tag, depth) {
     if (marker === "_" && start > 0 && /[\w]/.test(value[start - 1])) {
       return null;
     }
@@ -118,7 +122,7 @@
       return null;
     }
     return {
-      html: `<${tag}>${renderInline(value.slice(start + marker.length, end))}</${tag}>`,
+      html: `<${tag}>${renderInline(value.slice(start + marker.length, end), depth + 1)}</${tag}>`,
       end: end + marker.length,
     };
   }
@@ -144,8 +148,11 @@
     };
   }
 
-  function renderInline(value) {
+  function renderInline(value, depth = 0) {
     const input = String(value);
+    if (depth >= MAX_INLINE_DEPTH) {
+      return escapeHTML(input);
+    }
     let html = "";
     for (let index = 0; index < input.length; index += 1) {
       const character = input[index];
@@ -178,7 +185,7 @@
         }
       }
       if (character === "[") {
-        const link = parseLink(input, index);
+        const link = parseLink(input, index, depth);
         if (link) {
           html += link.html;
           index = link.end - 1;
@@ -187,17 +194,16 @@
       }
       if (input.startsWith("***", index) || input.startsWith("___", index)) {
         const marker = input.slice(index, index + 3);
-        const delimited = renderDelimited(input, index, marker, "em");
+        const delimited = renderDelimited(input, index, marker, "em", depth);
         if (delimited) {
-          const content = input.slice(index + 3, delimited.end - 3);
-          html += `<strong><em>${renderInline(content)}</em></strong>`;
+          html += `<strong>${delimited.html}</strong>`;
           index = delimited.end - 1;
           continue;
         }
       }
       if (input.startsWith("**", index) || input.startsWith("__", index)) {
         const marker = input.slice(index, index + 2);
-        const delimited = renderDelimited(input, index, marker, "strong");
+        const delimited = renderDelimited(input, index, marker, "strong", depth);
         if (delimited) {
           html += delimited.html;
           index = delimited.end - 1;
@@ -205,7 +211,7 @@
         }
       }
       if (character === "*" || character === "_") {
-        const delimited = renderDelimited(input, index, character, "em");
+        const delimited = renderDelimited(input, index, character, "em", depth);
         if (delimited) {
           html += delimited.html;
           index = delimited.end - 1;
@@ -255,9 +261,72 @@
     };
   }
 
+  function isHorizontalRule(line) {
+    const value = line.trim();
+    return (
+      /^(?:\*[ \t]*){3,}$/.test(value) ||
+      /^(?:-[ \t]*){3,}$/.test(value) ||
+      /^(?:_[ \t]*){3,}$/.test(value)
+    );
+  }
+
+  function splitTableRow(line) {
+    let value = line.trim();
+    if (value.startsWith("|")) {
+      value = value.slice(1);
+    }
+    if (value.endsWith("|") && !value.endsWith("\\|")) {
+      value = value.slice(0, -1);
+    }
+    return value.split("|").map((cell) => cell.trim());
+  }
+
+  function isTableSeparator(line) {
+    const cells = splitTableRow(line);
+    return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+  }
+
+  function isTableStart(lines, index) {
+    return (
+      index + 1 < lines.length &&
+      lines[index].includes("|") &&
+      splitTableRow(lines[index]).length > 1 &&
+      isTableSeparator(lines[index + 1])
+    );
+  }
+
+  function renderTableCells(cells, tag, count) {
+    const output = [];
+    for (let index = 0; index < count; index += 1) {
+      output.push(`<${tag}>${renderInline(cells[index] || "")}</${tag}>`);
+    }
+    return output.join("");
+  }
+
+  function renderTable(lines, start) {
+    const headers = splitTableRow(lines[start]);
+    const rows = [];
+    let index = start + 2;
+    while (index < lines.length && lines[index].trim() && lines[index].includes("|")) {
+      const cells = splitTableRow(lines[index]);
+      if (cells.length < 2) {
+        break;
+      }
+      rows.push(`<tr>${renderTableCells(cells, "td", headers.length)}</tr>`);
+      index += 1;
+    }
+
+    const body = rows.join("\n");
+    return {
+      html: `<table>\n<thead>\n<tr>${renderTableCells(headers, "th", headers.length)}</tr>\n</thead>\n<tbody>\n${body}\n</tbody>\n</table>`,
+      end: index,
+    };
+  }
+
   function blockStart(line) {
     return Boolean(
       fenceStart(line) ||
+        isHorizontalRule(line) ||
         /^ {0,3}#{1,6}[ \t]+/.test(line) ||
         /^ {0,3}>[ \t]?/.test(line) ||
         /^ {0,3}[-+*][ \t]+/.test(line) ||
@@ -311,6 +380,19 @@
         continue;
       }
 
+      if (isHorizontalRule(lines[index])) {
+        blocks.push("<hr>");
+        index += 1;
+        continue;
+      }
+
+      if (isTableStart(lines, index)) {
+        const table = renderTable(lines, index);
+        blocks.push(table.html);
+        index = table.end;
+        continue;
+      }
+
       const heading = lines[index].match(/^ {0,3}(#{1,6})[ \t]+(.+?)\s*#*[ \t]*$/);
       if (heading) {
         const level = heading[1].length;
@@ -337,7 +419,12 @@
       }
 
       const paragraph = [];
-      while (index < lines.length && lines[index].trim() && !blockStart(lines[index])) {
+      while (
+        index < lines.length &&
+        lines[index].trim() &&
+        !blockStart(lines[index]) &&
+        !isTableStart(lines, index)
+      ) {
         paragraph.push(lines[index]);
         index += 1;
       }
@@ -363,5 +450,5 @@
     return container;
   }
 
-  return { escapeHTML, renderInto, renderMarkdown, sanitizeHref };
+  return { escapeHTML, render: renderMarkdown, renderInto, renderMarkdown, sanitizeHref };
 });

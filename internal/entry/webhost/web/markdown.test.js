@@ -3,7 +3,12 @@
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
 
-const { renderMarkdown } = require("./markdown.js");
+const { render, renderMarkdown } = require("./markdown.js");
+
+test("exports render as a compatible alias", () => {
+  assert.strictEqual(render, renderMarkdown);
+  assert.equal(render("# Alias"), "<h1>Alias</h1>");
+});
 
 test("renders common Markdown blocks and inline styles", () => {
   const source = [
@@ -40,6 +45,24 @@ test("renders common Markdown blocks and inline styles", () => {
   assert.match(html, /<pre><code class="language-js">const value = &quot;&lt;unsafe&gt;&quot;;<\/code><\/pre>/);
 });
 
+test("renders horizontal rules and simple tables", () => {
+  const html = renderMarkdown(
+    [
+      "---",
+      "",
+      "| Name | Value |",
+      "| --- | --- |",
+      "| Alice | **one** |",
+      "| Bob | `two` |",
+    ].join("\n"),
+  );
+
+  assert.match(html, /<hr>\n/);
+  assert.match(html, /<table>\n<thead>\n<tr><th>Name<\/th><th>Value<\/th><\/tr>\n<\/thead>/);
+  assert.match(html, /<tbody>\n<tr><td>Alice<\/td><td><strong>one<\/strong><\/td><\/tr>/);
+  assert.match(html, /<tr><td>Bob<\/td><td><code>two<\/code><\/td><\/tr>\n<\/tbody>/);
+});
+
 test("escapes raw HTML and omits unsafe link destinations", () => {
   const html = renderMarkdown(
     'raw <img src=x onerror="alert(1)"> [bad](javascript:alert(1)) [data](data:text/html,pwn) [safe](mailto:user@example.com) [relative](../chapter)',
@@ -59,4 +82,28 @@ test("does not overflow on deeply nested blockquote markers", () => {
 
   assert.match(html, /text/);
   assert.ok((html.match(/<blockquote>/g) || []).length <= 64);
+});
+
+test("does not overflow on deeply nested links", () => {
+  let nested = "text";
+  for (let index = 0; index < 5000; index += 1) {
+    nested = `[${nested}](u)`;
+  }
+
+  assert.doesNotThrow(() => renderMarkdown(nested));
+
+  nested = "text";
+  for (let index = 0; index < 100; index += 1) {
+    nested = `[${nested}](u)`;
+  }
+  const html = renderMarkdown(nested);
+  assert.ok((html.match(/<a href="u">/g) || []).length <= 64);
+});
+
+test("falls back safely when link bracket scans exceed the inline limit", () => {
+  const source = `[${"x".repeat(5000)}](https://example.com)`;
+  const html = renderMarkdown(source);
+
+  assert.doesNotMatch(html, /<a href=/);
+  assert.ok(html.includes(source));
 });
