@@ -102,49 +102,30 @@ cd ainovel-cli
 mkdir config workspace
 ```
 
-**Bước 2** — Build Docker image:
+**Bước 2** — Tạo file cấu hình `config/config.json` (xem [phần Cấu hình bên dưới](#cấu-hình)).
+
+**Bước 3** — Build và khởi động web host:
 
 ```bash
-docker build -t ainovel-cli-vi .
+docker compose up --build
 ```
 
-> Lần đầu mất 2–5 phút do tải Go dependencies. Các lần sau dùng cache, rất nhanh.
+Mở trình duyệt tại `http://<LAN-IP>:8080`.
 
-**Bước 3** — Tạo file cấu hình `config/config.json` (xem [phần Cấu hình bên dưới](#cấu-hình)).
-
-**Bước 4** — Chạy TUI:
+**TUI cũ (tuỳ chọn)** — dừng web host trước, sau đó chạy:
 
 ```bash
-# Linux / macOS
-docker run --rm -it \
-  -v "$PWD/config:/root/.ainovel" \
-  -v "$PWD/workspace:/workspace" \
-  -e TERM=xterm-256color \
-  ainovel-cli-vi
-
-# Windows (PowerShell)
-docker run --rm -it `
-  -v "${PWD}\config:/root/.ainovel" `
-  -v "${PWD}\workspace:/workspace" `
-  -e TERM=xterm-256color `
-  ainovel-cli-vi
-
-# Windows (Command Prompt)
-docker run --rm -it -v "%CD%\config:/root/.ainovel" -v "%CD%\workspace:/workspace" -e TERM=xterm-256color ainovel-cli-vi
+docker compose stop
+docker compose run --rm --entrypoint ainovel-cli ainovel
 ```
 
-> **Windows Terminal**: Mở tab mới tự động —
-> ```powershell
-> Start-Process "wt.exe" -ArgumentList "new-tab", "cmd", "/k", 'docker run --rm -it -v "%CD%\config:/root/.ainovel" -v "%CD%\workspace:/workspace" -e TERM=xterm-256color ainovel-cli-vi'
-> ```
+> Never run the TUI concurrently against the same workspace. Không bao giờ chạy TUI đồng thời với web host trên cùng một thư mục `workspace`.
 
 **Chế độ không giao diện** (headless, chạy trên server):
 
 ```bash
-docker run --rm \
-  -v "$PWD/config:/root/.ainovel" \
-  -v "$PWD/workspace:/workspace" \
-  ainovel-cli-vi \
+docker compose stop
+docker compose run --rm --entrypoint ainovel-cli ainovel \
   --headless --prompt "Viết tiểu thuyết cung đấu, nhân vật chính là cô lao công xuất thân thấp kém"
 ```
 
