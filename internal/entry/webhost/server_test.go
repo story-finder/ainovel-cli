@@ -38,6 +38,9 @@ type fakeRuntime struct {
 	replay         []domain.RuntimeQueueItem
 	replayErr      error
 	closeCallCount int
+	startEntered   chan struct{}
+	startRelease   chan struct{}
+	startEnterOnce sync.Once
 }
 
 func newFakeRuntime() *fakeRuntime {
@@ -51,10 +54,17 @@ func newFakeRuntime() *fakeRuntime {
 
 func (f *fakeRuntime) StartPrepared(prompt string) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, "start")
 	f.startPrompts = append(f.startPrompts, prompt)
-	return f.startErr
+	err := f.startErr
+	f.mu.Unlock()
+	if f.startEntered != nil {
+		f.startEnterOnce.Do(func() { close(f.startEntered) })
+	}
+	if f.startRelease != nil {
+		<-f.startRelease
+	}
+	return err
 }
 
 func (f *fakeRuntime) Resume() (string, error) {
@@ -218,6 +228,56 @@ func TestCommandsMapOnlyToExistingHostMethods(t *testing.T) {
 	}
 	if want := []string{"keep going"}; !reflect.DeepEqual(rt.continueTexts, want) {
 		t.Fatalf("continue texts = %q, want %q", rt.continueTexts, want)
+	}
+}
+
+func TestCommandsSerializeRuntimeMutations(t *testing.T) {
+	rt := newFakeRuntime()
+	rt.startEntered = make(chan struct{})
+	rt.startRelease = make(chan struct{})
+	app := newServer(rt, 8)
+	t.Cleanup(app.Close)
+
+	startBody, err := json.Marshal(commandRequest{Action: "start", Text: "new story"})
+	if err != nil {
+		t.Fatalf("marshal start command: %v", err)
+	}
+	steerBody, err := json.Marshal(commandRequest{Action: "steer", Text: "change direction"})
+	if err != nil {
+		t.Fatalf("marshal steer command: %v", err)
+	}
+	postCommand := func(body []byte) <-chan *httptest.ResponseRecorder {
+		done := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			request := httptest.NewRequest(http.MethodPost, "/commands", bytes.NewReader(body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			app.Handler().ServeHTTP(response, request)
+			done <- response
+		}()
+		return done
+	}
+
+	startDone := postCommand(startBody)
+	select {
+	case <-rt.startEntered:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for start to enter runtime")
+	}
+
+	steerDone := postCommand(steerBody)
+	select {
+	case response := <-steerDone:
+		t.Fatalf("steer completed before start released with status %d", response.Code)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(rt.startRelease)
+	if response := <-startDone; response.Code != http.StatusOK {
+		t.Fatalf("start status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if response := <-steerDone; response.Code != http.StatusOK {
+		t.Fatalf("steer status = %d, want %d", response.Code, http.StatusOK)
 	}
 }
 

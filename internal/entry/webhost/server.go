@@ -39,6 +39,7 @@ type server struct {
 	pumpCancel context.CancelFunc
 	pumpDone   chan struct{}
 	closeOnce  sync.Once
+	commandMu  sync.Mutex
 }
 
 func newServer(rt runtime, replayLimit int) *server {
@@ -96,6 +97,9 @@ func (s *server) handleCommands(w http.ResponseWriter, r *http.Request) {
 		writeDecodeError(w, err)
 		return
 	}
+
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
 
 	action := strings.TrimSpace(request.Action)
 	text := strings.TrimSpace(request.Text)
