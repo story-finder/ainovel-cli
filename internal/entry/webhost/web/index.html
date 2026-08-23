@@ -93,8 +93,13 @@
         <h2>Viết lại</h2>
         <dl class="detail-list">
           <div><dt>Đang chờ</dt><dd id="status-rewrites">Chưa có dữ liệu</dd></div>
-          <div><dt>Can thiệp</dt><dd id="status-steer">Chưa có dữ liệu</dd></div>
           <div><dt>Khôi phục</dt><dd id="status-recovery">Chưa có dữ liệu</dd></div>
+        </dl>
+      </div>
+      <div class="status-group">
+        <h2>Can thiệp</h2>
+        <dl class="detail-list">
+          <div><dt>Trạng thái</dt><dd id="status-steer">Chưa có dữ liệu</dd></div>
         </dl>
       </div>
       <div class="status-progress">
@@ -171,50 +176,50 @@
         <p id="server-error" class="server-error" role="alert" aria-live="assertive"></p>
 
         <div class="composer-wrap">
-          <div id="command-palette" class="command-palette" role="listbox" aria-label="Bảng lệnh" hidden>
+          <section id="command-palette" class="command-palette" aria-label="Bảng lệnh" hidden>
             <div class="palette-heading">
               <span>Lệnh nhanh</span>
               <span class="palette-hint">Chọn một lệnh</span>
             </div>
             <ol class="command-list">
-              <li class="command-entry" role="option">
+              <li class="command-entry">
                 <button type="button" data-command="/model [vai-trò]">
                   <code>/model [vai-trò]</code>
                   <span>Chọn vai trò, nhà cung cấp và mô hình</span>
                 </button>
               </li>
-              <li class="command-entry" role="option">
+              <li class="command-entry">
                 <button type="button" data-command="/diag">
                   <code>/diag</code>
                   <span>Xem chẩn đoán kết nối và trạng thái máy chủ</span>
                 </button>
               </li>
-              <li class="command-entry" role="option">
+              <li class="command-entry">
                 <button type="button" data-command="/export">
                   <code>/export</code>
                   <span>Xuất phiên làm việc hiện tại</span>
                 </button>
               </li>
-              <li class="command-entry" role="option">
+              <li class="command-entry">
                 <button type="button" data-command="/import &lt;đường-dẫn&gt;">
                   <code>/import &lt;đường-dẫn&gt;</code>
                   <span>Nhập phiên từ đường dẫn cục bộ</span>
                 </button>
               </li>
-              <li class="command-entry" role="option">
+              <li class="command-entry">
                 <button type="button" data-command="/simulate">
                   <code>/simulate</code>
                   <span>Mô phỏng lượt chạy tiếp theo</span>
                 </button>
               </li>
-              <li class="command-entry" role="option">
+              <li class="command-entry">
                 <button type="button" data-command="/cocreate">
                   <code>/cocreate</code>
                   <span>Chuyển sang chế độ đồng sáng tác</span>
                 </button>
               </li>
             </ol>
-          </div>
+          </section>
 
           <form id="composer-form" class="composer-form">
             <div class="composer-input-row">
