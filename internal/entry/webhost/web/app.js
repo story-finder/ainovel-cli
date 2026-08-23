@@ -2,12 +2,12 @@
   "use strict";
 
   const commands = [
-    { name: "model", usage: "/model [vai-trò]", description: "Chọn vai trò, nhà cung cấp và mô hình" },
-    { name: "diag", usage: "/diag", description: "Xem báo cáo chẩn đoán sáng tác" },
-    { name: "export", usage: "/export", description: "Xuất truyện ra TXT hoặc EPUB" },
-    { name: "import", usage: "/import <đường-dẫn>", description: "Nhập tiểu thuyết để tiếp tục viết" },
-    { name: "simulate", usage: "/simulate", description: "Tạo hồ sơ phong cách từ thư mục simulate" },
-    { name: "cocreate", usage: "/cocreate", description: "Tạm dừng để cùng lên kế hoạch giai đoạn tiếp theo" },
+    { name: "model", usage: "/model [vai-trò]", description: "Chuyển đổi mô hình mặc định hoặc theo vai trò" },
+    { name: "diag", usage: "/diag", description: "Chẩn đoán tình trạng sáng tác tiểu thuyết" },
+    { name: "export", usage: "/export", description: "Xuất truyện các chương đã hoàn thành sang TXT/EPUB" },
+    { name: "import", usage: "/import <đường-dẫn>", description: "Nhập truyện bên ngoài để tiếp tục viết" },
+    { name: "simulate", usage: "/simulate", description: "Đọc ./simulate để tạo hoặc cập nhật tăng dần hồ sơ mô phỏng phong cách viết" },
+    { name: "cocreate", usage: "/cocreate", description: "Tạm dừng sáng tác, đồng sáng tác lên kế hoạch cho các giai đoạn tiếp theo" },
   ];
   const roles = ["default", "coordinator", "architect", "writer", "editor"];
   const roleLabels = {
@@ -20,24 +20,24 @@
   const statusLabelMap = {
     ready: "Sẵn sàng",
     running: "Đang chạy",
-    review: "Đang đánh giá",
-    rewrite: "Đang viết lại",
-    complete: "Đã hoàn thành",
-    paused: "Đã tạm dừng",
+    review: "Đánh giá",
+    rewrite: "Viết lại",
+    complete: "Hoàn tất",
+    paused: "Tạm dừng",
   };
   const phaseLabels = {
     init: "Khởi tạo",
     premise: "Tiền đề",
     outline: "Đề cương",
-    writing: "Đang sáng tác",
+    writing: "Viết",
     complete: "Hoàn tất",
   };
   const flowLabels = {
-    writing: "Đang viết",
-    reviewing: "Đang đánh giá",
-    rewriting: "Đang viết lại",
-    polishing: "Đang hoàn thiện",
-    steering: "Đang điều chỉnh",
+    writing: "Viết",
+    reviewing: "Đánh giá",
+    rewriting: "Viết lại",
+    polishing: "Đánh bóng",
+    steering: "Điều chỉnh",
   };
   const runtimeStateLabels = {
     idle: "Đang chờ",
@@ -360,7 +360,7 @@
       const pending = field(payload, "pending", "Pending");
       if (pending) {
         renderQuestionFrame(pending);
-      } else {
+      } else if (state.pendingQuestion || !elements.question.hidden) {
         clearQuestionFrame();
       }
     }
@@ -511,7 +511,14 @@
     elements.questionError.textContent = "";
   }
 
+  function sameQuestionFrame(frame) {
+    const id = text(get(frame, "id", "ID"));
+    const questions = get(frame, "questions", "Questions");
+    return Boolean(state.pendingQuestion && !elements.question.hidden && id && Array.isArray(questions) && state.pendingQuestion.id === id && JSON.stringify(state.pendingQuestion.questions) === JSON.stringify(questions));
+  }
+
   function renderQuestionFrame(frame) {
+    if (sameQuestionFrame(frame)) return;
     const id = text(get(frame, "id", "ID"));
     const questions = get(frame, "questions", "Questions");
     if (!id || !Array.isArray(questions)) { setError("Câu hỏi từ máy chủ không hợp lệ."); return; }
