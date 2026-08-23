@@ -85,6 +85,7 @@
     status: null,
     started: false,
     coCreateActive: false,
+    coCreatePending: false,
     detailsOpen: false,
     eventSource: null,
   };
@@ -219,8 +220,19 @@
     const suggestions = get(payload, "suggestions", "Suggestions");
     const command = text(get(payload, "command", "Command"));
     if (prompt || command === "/cocreate" || command === "cocreate") state.coCreateActive = true;
-    if (command === "cocreate_apply") state.coCreateActive = Boolean(error);
-    if (command === "cocreate_cancel" && !error) state.coCreateActive = false;
+    if (command === "cocreate_apply" && !error) {
+      state.coCreatePending = false;
+      state.coCreateActive = false;
+    }
+    if (command === "cocreate_apply" && error) state.coCreatePending = false;
+    if (command === "cocreate_cancel" && !error) {
+      state.coCreatePending = false;
+      state.coCreateActive = false;
+    }
+    if (command === "cocreate" && error) {
+      state.coCreatePending = false;
+      state.coCreateActive = false;
+    }
     const resultSections = [];
     if (markdown || error) resultSections.push(markdown || error);
     if (prompt) resultSections.push(`## Bản nháp chỉ thị\n\n${prompt}`);
@@ -318,7 +330,7 @@
     state.status = snapshot;
     const coCreate = get(payload, "cocreate", "CoCreate");
     if (coCreate && typeof coCreate === "object") {
-      state.coCreateActive = Boolean(get(coCreate, "active", "Active")) || Boolean(get(coCreate, "inFlight", "InFlight"));
+      state.coCreateActive = state.coCreatePending || Boolean(get(coCreate, "active", "Active")) || Boolean(get(coCreate, "inFlight", "InFlight"));
     }
     const runtimeState = String(get(snapshot, "runtimeState", "RuntimeState") || "").toLowerCase();
     state.started = Boolean(get(snapshot, "isRunning", "IsRunning")) || ["running", "writing", "reviewing", "rewriting", "polishing"].includes(runtimeState);
@@ -468,23 +480,36 @@
   }
 
   async function postCommand(command, extra = {}) {
+    const coCreateCommand = command.trim().toLowerCase() === "/cocreate";
     if (command.trim().toLowerCase() === "/cocreate") state.coCreateActive = true;
+    if (command.trim().toLowerCase() === "/cocreate") state.coCreatePending = true;
     addUserMessage(command);
     try { await requestJSON("/commands", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "command", text: command, ...extra }) }); setError(""); return true; }
-    catch (error) { setError(formatError(error, "Không thể thực hiện lệnh.")); return false; }
+    catch (error) {
+      if (coCreateCommand) { state.coCreatePending = false; state.coCreateActive = false; }
+      setError(formatError(error, "Không thể thực hiện lệnh.")); return false;
+    }
   }
 
   async function postInternal(action, value) {
+    if (action === "cocreate_apply") state.coCreatePending = true;
+    if (action === "cocreate_cancel") state.coCreatePending = true;
     try {
       await requestJSON("/commands", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, text: value }) });
-      if (["cocreate_apply", "cocreate_cancel"].includes(action)) state.coCreateActive = false;
+      if (action === "cocreate_cancel") {
+        state.coCreatePending = false;
+        state.coCreateActive = false;
+      }
       setError("");
       return true;
-    } catch (error) { setError(formatError(error, "Không thể thực hiện thao tác.")); return false; }
+    } catch (error) {
+      if (["cocreate_apply", "cocreate_cancel"].includes(action)) state.coCreatePending = false;
+      setError(formatError(error, "Không thể thực hiện thao tác.")); return false;
+    }
   }
 
   function freeTextAction() {
-    if (state.coCreateActive) return "cocreate_message";
+    if (state.coCreateActive || state.coCreatePending) return "cocreate_message";
     const runtimeState = String(get(state.status, "runtimeState", "RuntimeState") || "").toLowerCase();
     if (["paused", "completed"].includes(runtimeState)) return "continue";
     if (!state.status || runtimeState === "idle") return "start";
@@ -512,9 +537,16 @@
     const body = { action, text: value };
     if (action === "start") body.mode = elements.startupMode.value || "quick";
     const startingCoCreate = action === "start" && body.mode === "cocreate";
+    const coCreateMessage = action === "cocreate_message";
     if (startingCoCreate) state.coCreateActive = true;
+    if (startingCoCreate) state.coCreatePending = true;
+    if (coCreateMessage) state.coCreatePending = true;
     try { await requestJSON("/commands", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); setError(""); }
-    catch (error) { if (startingCoCreate) state.coCreateActive = false; setError(formatError(error, "Không thể gửi yêu cầu.")); }
+    catch (error) {
+      if (startingCoCreate) { state.coCreatePending = false; state.coCreateActive = false; }
+      if (coCreateMessage) state.coCreatePending = false;
+      setError(formatError(error, "Không thể gửi yêu cầu."));
+    }
   }
 
   function clearQuestionFrame() {

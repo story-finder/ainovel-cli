@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/entry/startup"
 	"github.com/voocel/ainovel-cli/internal/host"
 	"github.com/voocel/ainovel-cli/internal/host/exp"
 	"github.com/voocel/ainovel-cli/internal/host/imp"
@@ -536,14 +537,34 @@ func TestWebAppResetsStreamingBeforeRefreshingStatus(t *testing.T) {
 func TestWebAppHydratesAndReservesCoCreateState(t *testing.T) {
 	content := embeddedAppJS(t)
 	for _, want := range []string{
+		`coCreatePending: false,`,
 		`const coCreate = get(payload, "cocreate", "CoCreate");`,
-		`state.coCreateActive = Boolean(get(coCreate, "active", "Active")) || Boolean(get(coCreate, "inFlight", "InFlight"));`,
+		`state.coCreateActive = state.coCreatePending || Boolean(get(coCreate, "active", "Active")) || Boolean(get(coCreate, "inFlight", "InFlight"));`,
 		`const startingCoCreate = action === "start" && body.mode === "cocreate";`,
 		`if (startingCoCreate) state.coCreateActive = true;`,
+		`if (startingCoCreate) state.coCreatePending = true;`,
 		`if (command.trim().toLowerCase() === "/cocreate") state.coCreateActive = true;`,
+		`if (command.trim().toLowerCase() === "/cocreate") state.coCreatePending = true;`,
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("web/app.js missing co-create state assertion %q", want)
+		}
+	}
+}
+
+func TestWebAppKeepsCoCreateReservedThroughAsyncApplyAndCleansFailedRequests(t *testing.T) {
+	content := embeddedAppJS(t)
+	for _, want := range []string{
+		`if (action === "cocreate_apply") state.coCreatePending = true;`,
+		`if (action === "cocreate_cancel") state.coCreatePending = true;`,
+		`if (command === "cocreate_apply" && !error) {`,
+		`state.coCreatePending = false;`,
+		`state.coCreateActive = false;`,
+		`if (coCreateCommand) { state.coCreatePending = false; state.coCreateActive = false; }`,
+		`if (startingCoCreate) { state.coCreatePending = false; state.coCreateActive = false; }`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("web/app.js missing co-create reservation assertion %q", want)
 		}
 	}
 }
@@ -1311,6 +1332,27 @@ func TestStartCoCreateRejectsConcurrentSession(t *testing.T) {
 	})
 	assertRecorderJSONError(t, second, http.StatusConflict, "đang")
 	close(rt.release)
+}
+
+func TestQuickStartRejectsActiveCoCreateSession(t *testing.T) {
+	rt := newFakeRuntime()
+	app := newServer(rt, 8)
+	t.Cleanup(app.Close)
+
+	app.coCreateMu.Lock()
+	app.coCreateSession = startup.NewCoCreateSession("ý tưởng đang đồng sáng tác")
+	app.coCreateMu.Unlock()
+
+	response := serveAppJSON(t, app, http.MethodPost, "/commands", map[string]any{
+		"action": "start", "mode": "quick", "text": "ý tưởng mới",
+	})
+	assertRecorderJSONError(t, response, http.StatusConflict, "đang có một lượt đồng sáng tác khác")
+
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if len(rt.startPrompts) != 0 {
+		t.Fatalf("StartPrepared calls = %#v, want none", rt.startPrompts)
+	}
 }
 
 func TestColdCoCreateMessageUsesSameSessionAndColdStream(t *testing.T) {

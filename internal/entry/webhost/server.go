@@ -318,6 +318,10 @@ func (s *server) handleCommands(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "không gian làm việc có tiến độ đã được lưu; hãy dùng tiếp tục khôi phục")
 			return
 		}
+		if s.coCreateStatusSnapshot().Active {
+			writeError(w, http.StatusConflict, errCoCreateActive.Error())
+			return
+		}
 		plan, err := startup.PrepareQuick(startup.Request{
 			Mode:        startup.ModeQuick,
 			UserPrompt:  text,
