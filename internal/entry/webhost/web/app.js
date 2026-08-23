@@ -102,6 +102,7 @@
     detailsOpen: false,
     eventSource: null,
     eventEpoch: null,
+    reconnectTimer: null,
   };
   const elements = {};
 
@@ -324,6 +325,10 @@
   }
 
   function connectEvents() {
+    if (state.reconnectTimer !== null) {
+      window.clearTimeout(state.reconnectTimer);
+      state.reconnectTimer = null;
+    }
     if (state.eventSource) state.eventSource.close();
     const epochQuery = state.eventEpoch ? `&epoch=${encodeURIComponent(state.eventEpoch)}` : "";
     const eventURL = lastEventID === null
@@ -363,7 +368,15 @@
     onEvent("runtime_replay", replayRuntime);
     eventSource.addEventListener("heartbeat", rememberEventID);
     eventSource.addEventListener("runtime_replay", rememberEventID);
-    source.addEventListener("error", () => setError("Luồng sự kiện đã ngắt, đang thử kết nối lại…"));
+    source.addEventListener("error", () => {
+      setError("Luồng sự kiện đã ngắt, đang thử kết nối lại…");
+      if (state.reconnectTimer !== null) return;
+      source.close();
+      state.reconnectTimer = window.setTimeout(() => {
+        state.reconnectTimer = null;
+        connectEvents();
+      }, 1000);
+    });
   }
 
   function runtimeLabel(value) { return translate(value, runtimeStateLabels); }
@@ -797,7 +810,7 @@
     renderChat();
     elements.composerForm.addEventListener("submit", submitComposer); elements.questionForm.addEventListener("submit", answerQuestion); elements.modelForm.addEventListener("submit", submitModel); document.getElementById("command-button").addEventListener("click", renderPalette); elements.modelPanelClose.addEventListener("click", () => { elements.modelPanel.hidden = true; }); elements.roleSelector.addEventListener("change", () => loadModels(elements.roleSelector.value)); elements.providerSelector.addEventListener("change", populateModels); elements.reconnectButton.addEventListener("click", connectEvents); elements.pauseButton.addEventListener("click", () => postInternal("pause", "")); elements.resumeButton.addEventListener("click", () => postInternal("resume", ""));
     elements.composerInput.addEventListener("input", renderPalette); elements.composerInput.addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); elements.composerForm.requestSubmit(); } else if (event.key === "Tab") { event.preventDefault(); elements.startupMode.value = elements.startupMode.value === "quick" ? "cocreate" : "quick"; } else if (event.key === "Escape") { elements.composerInput.value = ""; elements.commandPalette.hidden = true; elements.modelPanel.hidden = true; toggleDetails(false); } });
-    refreshStatus(); connectEvents(); state.statusTimer = window.setInterval(refreshStatus, 3000); window.addEventListener("beforeunload", () => { if (state.statusTimer) clearInterval(state.statusTimer); if (state.eventSource) state.eventSource.close(); });
+    refreshStatus(); connectEvents(); state.statusTimer = window.setInterval(refreshStatus, 3000); window.addEventListener("beforeunload", () => { if (state.statusTimer) clearInterval(state.statusTimer); if (state.reconnectTimer !== null) clearTimeout(state.reconnectTimer); if (state.eventSource) state.eventSource.close(); });
   }
 
   document.addEventListener("DOMContentLoaded", bind);

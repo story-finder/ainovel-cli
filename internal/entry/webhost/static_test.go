@@ -114,9 +114,11 @@ func TestAppReconnectsFromLatestEventCursor(t *testing.T) {
 		`resetChatTranscript();`,
 		`event.lastEventId`,
 		`eventEpoch: null,`,
+		`reconnectTimer: null,`,
 		`onEvent("session"`,
 		`epoch=`,
 		`/events?after=`,
+		`source.close();`,
 		`eventSource.addEventListener("heartbeat", rememberEventID);`,
 		`eventSource.addEventListener("runtime_replay", rememberEventID);`,
 	} {
