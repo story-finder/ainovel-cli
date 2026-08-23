@@ -337,7 +337,7 @@ dd {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(14rem, 17rem) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
   gap: 1rem;
   margin-top: 1rem;
@@ -825,6 +825,12 @@ legend {
 
 [hidden] {
   display: none !important;
+}
+
+@media (min-width: 64.01rem) {
+  .workspace:has(.model-panel:not([hidden])) {
+    grid-template-columns: minmax(14rem, 17rem) minmax(0, 1fr);
+  }
 }
 
 @media (max-width: 64rem) {

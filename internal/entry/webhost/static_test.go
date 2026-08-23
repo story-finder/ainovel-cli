@@ -210,6 +210,45 @@ func TestAssistantResultsAreNotRenderedAsUserBubbles(t *testing.T) {
 	}
 }
 
+func TestWorkspaceUsesFullWidthWhenModelPanelIsHidden(t *testing.T) {
+	content := embeddedCSS(t)
+	workspaceStart := strings.Index(content, ".workspace {")
+	if workspaceStart < 0 {
+		t.Fatal("web/app.css does not define the workspace rule")
+	}
+	workspaceEnd := strings.Index(content[workspaceStart:], "\n}")
+	if workspaceEnd < 0 {
+		t.Fatal("web/app.css has an unterminated workspace rule")
+	}
+	workspaceRule := content[workspaceStart : workspaceStart+workspaceEnd+2]
+	if !strings.Contains(workspaceRule, "grid-template-columns: minmax(0, 1fr);") {
+		t.Fatalf("default workspace rule keeps a hidden model column: %s", workspaceRule)
+	}
+	for _, want := range []string{
+		"@media (min-width: 64.01rem)",
+		".workspace:has(.model-panel:not([hidden]))",
+		"grid-template-columns: minmax(14rem, 17rem) minmax(0, 1fr);",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("web/app.css does not preserve the desktop model-panel layout assertion %q", want)
+		}
+	}
+}
+
+func TestAppNavigatesCommandPaletteWithKeyboard(t *testing.T) {
+	content := embeddedAppJS(t)
+	for _, want := range []string{
+		"event.key === \"ArrowDown\"",
+		"event.key === \"ArrowUp\"",
+		"state.commandIndex = Math.max(0, Math.min(state.commandIndex + delta, state.commandItems.length - 1));",
+		"selectCommand(state.commandItems[state.commandIndex]);",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("web/app.js does not contain command-palette keyboard assertion %q", want)
+		}
+	}
+}
+
 func embeddedAppJS(t *testing.T) string {
 	t.Helper()
 	app, err := webFS.ReadFile("web/app.js")

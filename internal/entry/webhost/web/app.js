@@ -530,6 +530,8 @@
     if (!query.startsWith("/")) { elements.commandPalette.hidden = true; return; }
     const name = query.slice(1).split(/\s/)[0];
     const filtered = commands.filter((command) => !name || command.name.startsWith(name));
+    state.commandItems = filtered;
+    state.commandIndex = filtered.length ? Math.min(state.commandIndex, filtered.length - 1) : 0;
     elements.commandList.replaceChildren();
     filtered.forEach((command, index) => {
       const item = document.createElement("li");
@@ -543,9 +545,36 @@
       item.appendChild(button); elements.commandList.appendChild(item);
       if (index === state.commandIndex) button.setAttribute("aria-current", "true");
     });
-    state.commandItems = filtered;
-    state.commandIndex = Math.min(state.commandIndex, Math.max(0, filtered.length - 1));
     elements.commandPalette.hidden = filtered.length === 0;
+  }
+
+  function moveCommandSelection(delta) {
+    if (elements.commandPalette.hidden || !state.commandItems || !state.commandItems.length) return false;
+    state.commandIndex = Math.max(0, Math.min(state.commandIndex + delta, state.commandItems.length - 1));
+    renderPalette();
+    const selected = elements.commandList.querySelector("[aria-current=\"true\"]");
+    if (selected) selected.scrollIntoView({ block: "nearest" });
+    return true;
+  }
+
+  function handleCommandPaletteKey(event) {
+    if (elements.commandPalette.hidden || !state.commandItems || !state.commandItems.length) return false;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      moveCommandSelection(1);
+      return true;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      moveCommandSelection(-1);
+      return true;
+    }
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      selectCommand(state.commandItems[state.commandIndex]);
+      return true;
+    }
+    return false;
   }
 
   function selectCommand(command) {
@@ -809,7 +838,7 @@
     elements.statusDetailsToggle.addEventListener("click", () => toggleDetails());
     renderChat();
     elements.composerForm.addEventListener("submit", submitComposer); elements.questionForm.addEventListener("submit", answerQuestion); elements.modelForm.addEventListener("submit", submitModel); document.getElementById("command-button").addEventListener("click", renderPalette); elements.modelPanelClose.addEventListener("click", () => { elements.modelPanel.hidden = true; }); elements.roleSelector.addEventListener("change", () => loadModels(elements.roleSelector.value)); elements.providerSelector.addEventListener("change", populateModels); elements.reconnectButton.addEventListener("click", connectEvents); elements.pauseButton.addEventListener("click", () => postInternal("pause", "")); elements.resumeButton.addEventListener("click", () => postInternal("resume", ""));
-    elements.composerInput.addEventListener("input", renderPalette); elements.composerInput.addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); elements.composerForm.requestSubmit(); } else if (event.key === "Tab") { event.preventDefault(); elements.startupMode.value = elements.startupMode.value === "quick" ? "cocreate" : "quick"; } else if (event.key === "Escape") { elements.composerInput.value = ""; elements.commandPalette.hidden = true; elements.modelPanel.hidden = true; toggleDetails(false); } });
+    elements.composerInput.addEventListener("input", renderPalette); elements.composerInput.addEventListener("keydown", (event) => { if (handleCommandPaletteKey(event)) return; if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); elements.composerForm.requestSubmit(); } else if (event.key === "Tab") { event.preventDefault(); elements.startupMode.value = elements.startupMode.value === "quick" ? "cocreate" : "quick"; } else if (event.key === "Escape") { elements.composerInput.value = ""; elements.commandPalette.hidden = true; elements.modelPanel.hidden = true; toggleDetails(false); } });
     refreshStatus(); connectEvents(); state.statusTimer = window.setInterval(refreshStatus, 3000); window.addEventListener("beforeunload", () => { if (state.statusTimer) clearInterval(state.statusTimer); if (state.reconnectTimer !== null) clearTimeout(state.reconnectTimer); if (state.eventSource) state.eventSource.close(); });
   }
 
