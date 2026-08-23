@@ -39,15 +39,24 @@ type modelRuntime interface {
 	SwitchModel(string, string, string) error
 }
 
+type coCreateRuntime interface {
+	CoCreateStream(context.Context, []host.CoCreateMessage, func(string, string)) (host.CoCreateReply, error)
+}
+
 type server struct {
-	rt         runtime
-	mux        *http.ServeMux
-	hub        *eventHub
-	broker     *questionBroker
-	pumpCancel context.CancelFunc
-	pumpDone   chan struct{}
-	closeOnce  sync.Once
-	commandMu  sync.Mutex
+	rt              runtime
+	mux             *http.ServeMux
+	hub             *eventHub
+	broker          *questionBroker
+	pumpCancel      context.CancelFunc
+	pumpDone        chan struct{}
+	closeOnce       sync.Once
+	commandMu       sync.Mutex
+	coCreateMu      sync.Mutex
+	coCreateSession *startup.CoCreateSession
+	coCreateCancel  context.CancelFunc
+	coCreateReply   host.CoCreateReply
+	coCreateActive  bool
 }
 
 func newServer(rt runtime, replayLimit int) *server {
@@ -172,6 +181,29 @@ func (s *server) handleCommands(w http.ResponseWriter, r *http.Request) {
 		if mode == "" {
 			mode = "quick"
 		}
+		if mode == "cocreate" {
+			if s.rt.Snapshot().RecoveryLabel != "" {
+				writeError(w, http.StatusConflict, "workspace has saved progress; use resume")
+				return
+			}
+			if text == "" {
+				writeError(w, http.StatusBadRequest, "yêu cầu đồng sáng tác không được để trống")
+				return
+			}
+			if err := s.startColdCoCreate(text); err != nil {
+				status := http.StatusBadRequest
+				switch {
+				case errors.Is(err, errCoCreateCapabilityUnavailable):
+					status = http.StatusNotImplemented
+				case errors.Is(err, errCoCreateActive):
+					status = http.StatusConflict
+				}
+				writeError(w, status, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
+			return
+		}
 		if mode != "quick" {
 			writeError(w, http.StatusBadRequest, "chế độ khởi động này chưa được hỗ trợ trên web")
 			return
@@ -234,6 +266,91 @@ func (s *server) handleCommands(w http.ResponseWriter, r *http.Request) {
 }
 
 var errModelCapabilityUnavailable = errors.New("runtime hiện tại không hỗ trợ chuyển mô hình")
+var errCoCreateCapabilityUnavailable = errors.New("runtime hiện tại không hỗ trợ đồng sáng tác")
+var errCoCreateActive = errors.New("đang có một lượt đồng sáng tác khác")
+
+func (s *server) startColdCoCreate(initial string) error {
+	rt, ok := s.rt.(coCreateRuntime)
+	if !ok {
+		return errCoCreateCapabilityUnavailable
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	session := startup.NewCoCreateSession(initial)
+	s.coCreateMu.Lock()
+	if s.coCreateActive {
+		s.coCreateMu.Unlock()
+		cancel()
+		return errCoCreateActive
+	}
+	s.coCreateActive = true
+	s.coCreateSession = session
+	s.coCreateCancel = cancel
+	s.coCreateReply = host.CoCreateReply{}
+	s.coCreateMu.Unlock()
+
+	go s.runColdCoCreate(ctx, rt, session)
+	return nil
+}
+
+func (s *server) runColdCoCreate(ctx context.Context, rt coCreateRuntime, session *startup.CoCreateSession) {
+	reply, err := rt.CoCreateStream(ctx, session.History(), func(kind, text string) {
+		s.coCreateMu.Lock()
+		if s.coCreateSession == session {
+			session.ApplyDelta(kind, text)
+		}
+		s.coCreateMu.Unlock()
+
+		s.hub.publish("command_progress", commandProgressFrame{
+			Command: "cocreate",
+			Text:    text,
+			Stage:   kind,
+			Level:   "info",
+		})
+	})
+
+	s.coCreateMu.Lock()
+	if s.coCreateSession == session {
+		if err == nil {
+			session.ApplyReply(reply)
+			s.coCreateReply = reply
+		}
+		s.coCreateActive = false
+		s.coCreateCancel = nil
+	}
+	s.coCreateMu.Unlock()
+
+	if err != nil {
+		s.hub.publish("command_result", commandResultFrame{
+			Command:  "cocreate",
+			Markdown: fmt.Sprintf("Đồng sáng tác thất bại: %v", err),
+			Error:    err.Error(),
+			Level:    "error",
+			Done:     true,
+		})
+		return
+	}
+
+	s.hub.publish("command_result", commandResultFrame{
+		Command:     "cocreate",
+		Markdown:    reply.Message,
+		Prompt:      reply.Prompt,
+		Ready:       reply.Ready,
+		Suggestions: append([]string(nil), reply.Suggestions...),
+		Level:       "success",
+		Done:        true,
+	})
+}
+
+func (s *server) cancelColdCoCreate() {
+	s.coCreateMu.Lock()
+	defer s.coCreateMu.Unlock()
+	if s.coCreateCancel != nil {
+		s.coCreateCancel()
+		s.coCreateCancel = nil
+	}
+	s.coCreateActive = false
+}
 
 func (s *server) handleWebCommand(text, provider, model string) error {
 	command, err := parseSlashCommand(text)

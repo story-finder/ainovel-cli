@@ -38,10 +38,21 @@ type modelCatalogResponse struct {
 }
 
 type commandResultFrame struct {
-	Command  string `json:"command"`
-	Markdown string `json:"markdown"`
-	Level    string `json:"level"`
-	Done     bool   `json:"done"`
+	Command     string   `json:"command"`
+	Markdown    string   `json:"markdown"`
+	Prompt      string   `json:"prompt,omitempty"`
+	Ready       bool     `json:"ready"`
+	Suggestions []string `json:"suggestions,omitempty"`
+	Error       string   `json:"error,omitempty"`
+	Level       string   `json:"level"`
+	Done        bool     `json:"done"`
+}
+
+type commandProgressFrame struct {
+	Command string `json:"command"`
+	Text    string `json:"text"`
+	Stage   string `json:"stage,omitempty"`
+	Level   string `json:"level"`
 }
 
 func normalizeWebModelRole(role string) (string, bool) {

@@ -61,6 +61,56 @@ type modelRuntimeFake struct {
 	switchErr        error
 }
 
+type coCreateRuntimeFake struct {
+	*fakeRuntime
+	entered     chan struct{}
+	release     chan struct{}
+	enterOnce   sync.Once
+	history     []host.CoCreateMessage
+	progress    []struct{ kind, text string }
+	reply       host.CoCreateReply
+	streamError error
+}
+
+func newCoCreateRuntimeFake() *coCreateRuntimeFake {
+	return &coCreateRuntimeFake{
+		fakeRuntime: newFakeRuntime(),
+		entered:     make(chan struct{}),
+		release:     make(chan struct{}),
+		reply: host.CoCreateReply{
+			Message:     "Phản hồi đồng sáng tác",
+			Prompt:      "Bản nháp chỉ thị sáng tác",
+			Ready:       true,
+			Suggestions: []string{"Thêm một nhân vật đồng hành"},
+		},
+	}
+}
+
+func (f *coCreateRuntimeFake) CoCreateStream(ctx context.Context, history []host.CoCreateMessage, onProgress func(string, string)) (host.CoCreateReply, error) {
+	f.mu.Lock()
+	f.history = append([]host.CoCreateMessage(nil), history...)
+	progress := append([]struct{ kind, text string }(nil), f.progress...)
+	reply, streamError := f.reply, f.streamError
+	f.mu.Unlock()
+
+	if f.entered != nil {
+		f.enterOnce.Do(func() { close(f.entered) })
+	}
+	if f.release != nil {
+		select {
+		case <-f.release:
+		case <-ctx.Done():
+			return host.CoCreateReply{}, ctx.Err()
+		}
+	}
+	for _, item := range progress {
+		if onProgress != nil {
+			onProgress(item.kind, item.text)
+		}
+	}
+	return reply, streamError
+}
+
 func newFakeRuntimeWithCommandCapabilities() *modelRuntimeFake {
 	return &modelRuntimeFake{
 		fakeRuntime: newFakeRuntime(),
@@ -395,6 +445,103 @@ func TestCommandRejectsHelpLifecycleAndUnknownCommands(t *testing.T) {
 			assertRecorderJSONError(t, response, http.StatusBadRequest, "lệnh")
 		})
 	}
+}
+
+func TestStartCoCreateRequiresInitialText(t *testing.T) {
+	app := newServer(newCoCreateRuntimeFake(), 8)
+	t.Cleanup(app.Close)
+
+	response := serveAppJSON(t, app, http.MethodPost, "/commands", map[string]any{
+		"action": "start", "mode": "cocreate", "text": "   ",
+	})
+	assertRecorderJSONError(t, response, http.StatusBadRequest, "yêu cầu")
+}
+
+func TestStartCoCreateReturnsNotImplementedWithoutCapability(t *testing.T) {
+	app := newServer(newFakeRuntime(), 8)
+	t.Cleanup(app.Close)
+
+	response := serveAppJSON(t, app, http.MethodPost, "/commands", map[string]any{
+		"action": "start", "mode": "cocreate", "text": "ý tưởng truyện",
+	})
+	assertRecorderJSONError(t, response, http.StatusNotImplemented, "đồng sáng tác")
+}
+
+func TestStartCoCreateReturnsAcceptedAndPublishesProgressAndResult(t *testing.T) {
+	rt := newCoCreateRuntimeFake()
+	rt.release = nil
+	rt.progress = []struct{ kind, text string }{
+		{kind: host.CoCreateProgressThinking, text: "Đang suy nghĩ"},
+		{kind: host.CoCreateProgressReply, text: "Đang trả lời"},
+	}
+	app := newServer(rt, 8)
+	t.Cleanup(app.Close)
+
+	response := serveAppJSON(t, app, http.MethodPost, "/commands", map[string]any{
+		"action": "start", "mode": "cocreate", "text": "Một truyện trinh thám",
+	})
+	assertRecorderJSONOK(t, response, http.StatusAccepted)
+
+	firstProgress := waitForFrame(t, app.hub, "command_progress")
+	secondProgress := waitForFrameAfter(t, app.hub, firstProgress.ID, "command_progress")
+	var progress struct {
+		Command string `json:"command"`
+		Text    string `json:"text"`
+		Stage   string `json:"stage"`
+		Level   string `json:"level"`
+	}
+	if err := json.Unmarshal(secondProgress.Data, &progress); err != nil {
+		t.Fatalf("decode command progress: %v", err)
+	}
+	if progress.Command != "cocreate" || progress.Stage != host.CoCreateProgressReply || progress.Text != "Đang trả lời" || progress.Level != "info" {
+		t.Fatalf("command progress = %#v", progress)
+	}
+
+	result := waitForFrameAfter(t, app.hub, secondProgress.ID, "command_result")
+	var payload struct {
+		Command     string   `json:"command"`
+		Markdown    string   `json:"markdown"`
+		Prompt      string   `json:"prompt"`
+		Ready       bool     `json:"ready"`
+		Suggestions []string `json:"suggestions"`
+		Level       string   `json:"level"`
+		Done        bool     `json:"done"`
+	}
+	if err := json.Unmarshal(result.Data, &payload); err != nil {
+		t.Fatalf("decode co-create result: %v", err)
+	}
+	if payload.Command != "cocreate" || payload.Markdown != rt.reply.Message || payload.Prompt != rt.reply.Prompt || !payload.Ready || !reflect.DeepEqual(payload.Suggestions, rt.reply.Suggestions) || payload.Level != "success" || !payload.Done {
+		t.Fatalf("co-create result = %#v", payload)
+	}
+
+	rt.mu.Lock()
+	history := append([]host.CoCreateMessage(nil), rt.history...)
+	rt.mu.Unlock()
+	if want := []host.CoCreateMessage{{Role: "user", Content: "Một truyện trinh thám"}}; !reflect.DeepEqual(history, want) {
+		t.Fatalf("co-create history = %#v, want %#v", history, want)
+	}
+}
+
+func TestStartCoCreateRejectsConcurrentSession(t *testing.T) {
+	rt := newCoCreateRuntimeFake()
+	app := newServer(rt, 8)
+	t.Cleanup(app.Close)
+
+	first := serveAppJSON(t, app, http.MethodPost, "/commands", map[string]any{
+		"action": "start", "mode": "cocreate", "text": "Truyện đầu tiên",
+	})
+	assertRecorderJSONOK(t, first, http.StatusAccepted)
+	select {
+	case <-rt.entered:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for cold co-create to start")
+	}
+
+	second := serveAppJSON(t, app, http.MethodPost, "/commands", map[string]any{
+		"action": "start", "mode": "cocreate", "text": "Truyện thứ hai",
+	})
+	assertRecorderJSONError(t, second, http.StatusConflict, "đang")
+	close(rt.release)
 }
 
 func TestQuestionsRootReturnsJSONNotFound(t *testing.T) {
