@@ -85,8 +85,10 @@
     import: "Nhập truyện",
     simulate: "Mô phỏng",
   };
+  const MAX_TRANSCRIPT_MESSAGES = 200;
   let latestStatusRequestID = 0;
   let questionRevision = 0;
+  let streamRenderFrame = null;
   const welcomeMessage = "Sẵn sàng đồng hành cùng bạn. Hãy mô tả ý tưởng, nhân vật hoặc cảnh mở đầu để bắt đầu.";
   let lastEventID = null;
   const state = {
@@ -162,6 +164,19 @@
     return payload || {};
   }
 
+  function renderMessageContent(content, message) {
+    content.className = `message-content ${message.kind === "user" ? "user-text" : "assistant-markdown"}`;
+    if (message.kind === "user") {
+      content.textContent = message.text || "";
+    } else if (message.markdown || message.text) {
+      const renderer = window.AINovelMarkdown && window.AINovelMarkdown.render;
+      if (renderer) content.innerHTML = renderer(message.markdown || message.text || "");
+      else content.textContent = message.markdown || message.text || "";
+    } else {
+      content.replaceChildren();
+    }
+  }
+
   function messageNode(message) {
     const article = document.createElement("article");
     article.className = `message message-${message.kind || "event"}`;
@@ -174,14 +189,7 @@
     label.textContent = message.label || (message.kind === "user" ? "Yêu cầu" : "Phản hồi");
     meta.append(author, label);
     const content = document.createElement("div");
-    content.className = `message-content ${message.kind === "user" ? "user-text" : "assistant-markdown"}`;
-    if (message.kind === "user") {
-      content.textContent = message.text || "";
-    } else if (message.markdown || message.text) {
-      const renderer = window.AINovelMarkdown && window.AINovelMarkdown.render;
-      if (renderer) content.innerHTML = renderer(message.markdown || message.text || "");
-      else content.textContent = message.markdown || message.text || "";
-    }
+    renderMessageContent(content, message);
     article.append(meta, content);
     if (message.actions) appendActions(article, message.actions);
     return article;
@@ -201,9 +209,62 @@
     article.appendChild(wrap);
   }
 
+  function trimMessages() {
+    const removed = [];
+    while (state.messages.length > MAX_TRANSCRIPT_MESSAGES) {
+      let removeIndex = 0;
+      if (removeIndex === state.streamingIndex) removeIndex = 1;
+      state.messages.splice(removeIndex, 1);
+      removed.push(removeIndex);
+      if (state.streamingIndex > removeIndex) state.streamingIndex -= 1;
+    }
+    return removed;
+  }
+
+  function appendMessage(message) {
+    const previousLength = state.messages.length;
+    state.messages.push(message);
+    const removed = trimMessages();
+    if (!elements.transcript) return;
+    if (elements.transcript.children.length !== previousLength) {
+      renderChat();
+      return;
+    }
+    for (let index = removed.length - 1; index >= 0; index -= 1) {
+      const child = elements.transcript.children[removed[index]];
+      if (child) child.remove();
+    }
+    elements.transcript.appendChild(messageNode(message));
+    elements.transcript.scrollTop = elements.transcript.scrollHeight;
+  }
+
   function renderChat() {
+    trimMessages();
     elements.transcript.replaceChildren(...state.messages.map(messageNode));
     elements.transcript.scrollTop = elements.transcript.scrollHeight;
+  }
+
+  function renderStreamingMessage() {
+    if (state.streamingIndex < 0) return;
+    const message = state.messages[state.streamingIndex];
+    const article = elements.transcript.children[state.streamingIndex];
+    if (!message || !article) return;
+    const content = article.querySelector(".message-content");
+    if (content) renderMessageContent(content, message);
+    elements.transcript.scrollTop = elements.transcript.scrollHeight;
+  }
+
+  function scheduleStreamRender() {
+    if (streamRenderFrame !== null) return;
+    const render = () => {
+      streamRenderFrame = null;
+      renderStreamingMessage();
+    };
+    if (typeof window.requestAnimationFrame === "function") {
+      streamRenderFrame = window.requestAnimationFrame(render);
+    } else {
+      streamRenderFrame = window.setTimeout(render, 50);
+    }
   }
 
   function resetChatTranscript() {
@@ -215,37 +276,55 @@
   function addUserMessage(value) {
     const valueText = String(value || "").trim();
     if (!valueText) return;
-    state.messages.push({ kind: "user", text: valueText });
-    renderChat();
+    appendMessage({ kind: "user", text: valueText });
   }
 
   function startAssistantMessage() {
-    if (state.streamingIndex >= 0) state.messages[state.streamingIndex].streaming = false;
-    state.messages.push({ kind: "assistant", markdown: "", streaming: true, label: "Đang phản hồi" });
+    if (state.streamingIndex >= 0) {
+      const previous = state.messages[state.streamingIndex];
+      previous.streaming = false;
+      previous.label = "Phản hồi hoàn tất";
+      const previousNode = elements.transcript.children[state.streamingIndex];
+      if (previousNode) {
+        previousNode.classList.remove("is-streaming");
+        const previousLabel = previousNode.querySelector(".message-meta span:last-child");
+        if (previousLabel) previousLabel.textContent = previous.label;
+        const previousContent = previousNode.querySelector(".message-content");
+        if (previousContent) renderMessageContent(previousContent, previous);
+      }
+    }
+    const message = { kind: "assistant", markdown: "", streaming: true, label: "Đang phản hồi" };
+    appendMessage(message);
     state.streamingIndex = state.messages.length - 1;
-    renderChat();
   }
 
   function appendAssistantDelta(delta) {
     if (typeof delta !== "string" || !delta) return;
     if (state.streamingIndex < 0) startAssistantMessage();
     state.messages[state.streamingIndex].markdown += delta;
-    renderChat();
+    scheduleStreamRender();
   }
 
   function finishAssistant() {
     if (state.streamingIndex >= 0) {
-      state.messages[state.streamingIndex].streaming = false;
-      state.messages[state.streamingIndex].label = "Phản hồi hoàn tất";
+      const message = state.messages[state.streamingIndex];
+      const article = elements.transcript.children[state.streamingIndex];
+      message.streaming = false;
+      message.label = "Phản hồi hoàn tất";
+      if (article) {
+        article.classList.remove("is-streaming");
+        const label = article.querySelector(".message-meta span:last-child");
+        if (label) label.textContent = message.label;
+        const content = article.querySelector(".message-content");
+        if (content) renderMessageContent(content, message);
+      }
       state.streamingIndex = -1;
-      renderChat();
     }
   }
 
   function addEventMessage(author, content, level = "info", label = "Thông tin") {
     if (!content) return;
-    state.messages.push({ kind: level === "error" ? "event" : "progress", author: text(author, "Máy chủ"), label, markdown: String(content) });
-    renderChat();
+    appendMessage({ kind: level === "error" ? "event" : "progress", author: text(author, "Máy chủ"), label, markdown: String(content) });
   }
 
   function addCommandResult(payload) {
@@ -275,7 +354,7 @@
     const actions = [];
     if (ready && prompt) actions.push({ label: "Áp dụng và tiếp tục", handler: () => postInternal("cocreate_apply", prompt) });
     if (state.coCreateActive) actions.push({ label: "Thoát đồng sáng tác", secondary: true, handler: () => postInternal("cocreate_cancel", "") });
-    state.messages.push({
+    appendMessage({
       kind: "result",
       author: commandLabel(command),
       label: error ? "Lỗi" : "Kết quả lệnh",
@@ -283,13 +362,12 @@
       actions: actions.length ? actions : undefined,
     });
     if (Array.isArray(suggestions)) addSuggestions(suggestions);
-    renderChat();
   }
 
   function addSuggestions(suggestions) {
     const valid = suggestions.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 3);
     if (!valid.length) return;
-    state.messages.push({ kind: "event", author: "Gợi ý", label: "Bạn có thể nói tiếp", markdown: valid.map((item, index) => `${index + 1}. ${item}`).join("\n") });
+    appendMessage({ kind: "event", author: "Gợi ý", label: "Bạn có thể nói tiếp", markdown: valid.map((item, index) => `${index + 1}. ${item}`).join("\n") });
   }
 
   function parseEvent(event) {
@@ -504,8 +582,7 @@
   function addRecoveryNotice(label) {
     if (recoveryNotice) return;
     recoveryNotice = true;
-    state.messages.push({ kind: "event", author: "Máy chủ", label: "Khôi phục", markdown: `Đã tìm thấy tiến độ đã lưu: **${label}**. Bạn có thể tiếp tục khôi phục.` });
-    renderChat();
+    appendMessage({ kind: "event", author: "Máy chủ", label: "Khôi phục", markdown: `Đã tìm thấy tiến độ đã lưu: **${label}**. Bạn có thể tiếp tục khôi phục.` });
   }
 
   async function refreshStatus() {

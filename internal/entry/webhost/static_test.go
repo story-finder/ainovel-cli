@@ -249,6 +249,46 @@ func TestAppNavigatesCommandPaletteWithKeyboard(t *testing.T) {
 	}
 }
 
+func TestAppBoundsTranscriptHistory(t *testing.T) {
+	content := embeddedAppJS(t)
+	for _, want := range []string{
+		"const MAX_TRANSCRIPT_MESSAGES = 200;",
+		"function trimMessages()",
+		"state.messages.splice(removeIndex, 1);",
+		"if (removeIndex === state.streamingIndex) removeIndex = 1;",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("web/app.js does not bound transcript history assertion %q", want)
+		}
+	}
+}
+
+func TestAppBatchesStreamingRenders(t *testing.T) {
+	content := embeddedAppJS(t)
+	for _, want := range []string{
+		"function scheduleStreamRender()",
+		"window.requestAnimationFrame",
+		"scheduleStreamRender();",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("web/app.js does not batch stream rendering assertion %q", want)
+		}
+	}
+}
+
+func TestAppAppendsTranscriptMessagesWithoutRebuildingHistory(t *testing.T) {
+	content := embeddedAppJS(t)
+	for _, want := range []string{
+		"function appendMessage(message)",
+		"elements.transcript.appendChild(messageNode(message));",
+		"addEventMessage",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("web/app.js does not append transcript messages incrementally assertion %q", want)
+		}
+	}
+}
+
 func embeddedAppJS(t *testing.T) string {
 	t.Helper()
 	app, err := webFS.ReadFile("web/app.js")
