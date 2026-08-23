@@ -17,6 +17,48 @@ type slashCommand struct {
 	Args []string
 }
 
+var webModelRoles = []string{"default", "coordinator", "architect", "writer", "editor"}
+
+type modelProviderResponse struct {
+	Provider string   `json:"provider"`
+	Models   []string `json:"models"`
+}
+
+type modelSelectionResponse struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	Explicit bool   `json:"explicit"`
+}
+
+type modelCatalogResponse struct {
+	Role      string                  `json:"role"`
+	Roles     []string                `json:"roles"`
+	Providers []modelProviderResponse `json:"providers"`
+	Current   modelSelectionResponse  `json:"current"`
+}
+
+type commandResultFrame struct {
+	Command  string `json:"command"`
+	Markdown string `json:"markdown"`
+	Level    string `json:"level"`
+	Done     bool   `json:"done"`
+}
+
+func normalizeWebModelRole(role string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "", "default":
+		return "default", true
+	case "coordinator", "architect", "writer", "editor":
+		return strings.ToLower(strings.TrimSpace(role)), true
+	default:
+		return "", false
+	}
+}
+
+func webModelRoleList() []string {
+	return append([]string(nil), webModelRoles...)
+}
+
 func commandCatalog() []webCommandSpec {
 	return []webCommandSpec{
 		{

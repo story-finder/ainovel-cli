@@ -43,6 +43,66 @@ type fakeRuntime struct {
 	startEnterOnce sync.Once
 }
 
+type modelSelectionFake struct {
+	provider string
+	model    string
+	explicit bool
+}
+
+type modelRuntimeFake struct {
+	*fakeRuntime
+	providers []string
+	models    map[string][]string
+	current   map[string]modelSelectionFake
+
+	switchedRole     string
+	switchedProvider string
+	switchedModel    string
+	switchErr        error
+}
+
+func newFakeRuntimeWithCommandCapabilities() *modelRuntimeFake {
+	return &modelRuntimeFake{
+		fakeRuntime: newFakeRuntime(),
+		providers:   []string{"ollama", "openrouter"},
+		models: map[string][]string{
+			"openrouter": {"google/gemini-2.5-pro"},
+			"ollama":     {"qwen3.5:27b"},
+		},
+		current: map[string]modelSelectionFake{
+			"default": {provider: "openrouter", model: "google/gemini-2.5-pro", explicit: true},
+		},
+	}
+}
+
+func (f *modelRuntimeFake) ConfiguredProviders() []string {
+	return append([]string(nil), f.providers...)
+}
+
+func (f *modelRuntimeFake) ConfiguredModels(provider string) []string {
+	return append([]string(nil), f.models[provider]...)
+}
+
+func (f *modelRuntimeFake) CurrentModelSelection(role string) (string, string, bool) {
+	selection, ok := f.current[role]
+	if !ok && role != "default" {
+		selection, ok = f.current["default"]
+	}
+	if !ok {
+		return "", "", false
+	}
+	return selection.provider, selection.model, selection.explicit
+}
+
+func (f *modelRuntimeFake) SwitchModel(role, provider, model string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.switchedRole = role
+	f.switchedProvider = provider
+	f.switchedModel = model
+	return f.switchErr
+}
+
 func newFakeRuntime() *fakeRuntime {
 	return &fakeRuntime{
 		events: make(chan host.Event, 8),
@@ -187,6 +247,156 @@ func TestStatusReturnsExistingHostSnapshot(t *testing.T) {
 	}
 }
 
+func TestModelsReturnsTUIRolesAndConfiguredModels(t *testing.T) {
+	rt := newFakeRuntimeWithCommandCapabilities()
+	rt.current["writer"] = modelSelectionFake{provider: "ollama", model: "qwen3.5:27b", explicit: true}
+	app := newServer(rt, 8)
+	t.Cleanup(app.Close)
+
+	response := serveAppJSON(t, app, http.MethodGet, "/models?role=writer", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /models status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+
+	var body struct {
+		Role      string   `json:"role"`
+		Roles     []string `json:"roles"`
+		Providers []struct {
+			Provider string   `json:"provider"`
+			Models   []string `json:"models"`
+		} `json:"providers"`
+		Current struct {
+			Provider string `json:"provider"`
+			Model    string `json:"model"`
+			Explicit bool   `json:"explicit"`
+		} `json:"current"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode model catalog: %v", err)
+	}
+	wantRoles := []string{"default", "coordinator", "architect", "writer", "editor"}
+	if !reflect.DeepEqual(body.Roles, wantRoles) {
+		t.Fatalf("roles = %#v, want %#v", body.Roles, wantRoles)
+	}
+	if body.Role != "writer" {
+		t.Fatalf("role = %q, want writer", body.Role)
+	}
+	if len(body.Providers) != 2 || body.Current.Provider != "ollama" || body.Current.Model != "qwen3.5:27b" || !body.Current.Explicit {
+		t.Fatalf("model catalog = %#v", body)
+	}
+}
+
+func TestModelsReturnNotImplementedWithoutModelCapability(t *testing.T) {
+	app := newServer(newFakeRuntime(), 8)
+	t.Cleanup(app.Close)
+
+	response := serveAppJSON(t, app, http.MethodGet, "/models", nil)
+	assertRecorderJSONError(t, response, http.StatusNotImplemented, "không hỗ trợ")
+}
+
+func TestModelsRejectInvalidRole(t *testing.T) {
+	app := newServer(newFakeRuntimeWithCommandCapabilities(), 8)
+	t.Cleanup(app.Close)
+
+	response := serveAppJSON(t, app, http.MethodGet, "/models?role=writer2", nil)
+	assertRecorderJSONError(t, response, http.StatusBadRequest, "vai trò")
+}
+
+func TestCommandModelUsesSelectedProviderAndModel(t *testing.T) {
+	rt := newFakeRuntimeWithCommandCapabilities()
+	app := newServer(rt, 8)
+	t.Cleanup(app.Close)
+
+	response := serveAppJSON(t, app, http.MethodPost, "/commands", map[string]any{
+		"action": "command", "text": "/model writer",
+		"provider": "openrouter", "model": "google/gemini-2.5-pro",
+	})
+	assertRecorderJSONOK(t, response, http.StatusOK)
+
+	rt.mu.Lock()
+	role, provider, model := rt.switchedRole, rt.switchedProvider, rt.switchedModel
+	rt.mu.Unlock()
+	if role != "writer" || provider != "openrouter" || model != "google/gemini-2.5-pro" {
+		t.Fatalf("switch = %q/%q/%q", role, provider, model)
+	}
+}
+
+func TestCommandModelPublishesVietnameseResult(t *testing.T) {
+	app := newServer(newFakeRuntimeWithCommandCapabilities(), 8)
+	t.Cleanup(app.Close)
+
+	response := serveAppJSON(t, app, http.MethodPost, "/commands", map[string]any{
+		"action": "command", "text": "/model writer",
+		"provider": "openrouter", "model": "google/gemini-2.5-pro",
+	})
+	assertRecorderJSONOK(t, response, http.StatusOK)
+
+	result := waitForFrame(t, app.hub, "command_result")
+	var payload struct {
+		Command  string `json:"command"`
+		Markdown string `json:"markdown"`
+		Level    string `json:"level"`
+		Done     bool   `json:"done"`
+	}
+	if err := json.Unmarshal(result.Data, &payload); err != nil {
+		t.Fatalf("decode command result: %v", err)
+	}
+	if payload.Command != "/model writer" || !strings.Contains(payload.Markdown, "Đã chuyển mô hình") || payload.Level != "success" || !payload.Done {
+		t.Fatalf("command result = %#v", payload)
+	}
+}
+
+func TestCommandModelRejectsInvalidRoleAndMissingSelectors(t *testing.T) {
+	cases := []struct {
+		name string
+		body map[string]any
+		want string
+	}{
+		{
+			name: "invalid role",
+			body: map[string]any{"action": "command", "text": "/model writer2", "provider": "openrouter", "model": "model"},
+			want: "vai trò",
+		},
+		{
+			name: "missing role",
+			body: map[string]any{"action": "command", "text": "/model", "provider": "openrouter", "model": "model"},
+			want: "vai trò",
+		},
+		{
+			name: "missing provider",
+			body: map[string]any{"action": "command", "text": "/model writer", "model": "model"},
+			want: "provider",
+		},
+		{
+			name: "missing model",
+			body: map[string]any{"action": "command", "text": "/model writer", "provider": "openrouter"},
+			want: "model",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app := newServer(newFakeRuntimeWithCommandCapabilities(), 8)
+			t.Cleanup(app.Close)
+			response := serveAppJSON(t, app, http.MethodPost, "/commands", tc.body)
+			assertRecorderJSONError(t, response, http.StatusBadRequest, tc.want)
+		})
+	}
+}
+
+func TestCommandRejectsHelpLifecycleAndUnknownCommands(t *testing.T) {
+	for _, command := range []string{"/help", "/start", "/steer", "/continue", "/rewrite", "/unknown"} {
+		t.Run(command, func(t *testing.T) {
+			app := newServer(newFakeRuntimeWithCommandCapabilities(), 8)
+			t.Cleanup(app.Close)
+			response := serveAppJSON(t, app, http.MethodPost, "/commands", map[string]any{
+				"action": "command", "text": command,
+			})
+			assertRecorderJSONError(t, response, http.StatusBadRequest, "lệnh")
+		})
+	}
+}
+
 func TestQuestionsRootReturnsJSONNotFound(t *testing.T) {
 	server := newTestServer(t, newFakeRuntime())
 
@@ -313,6 +523,59 @@ func assertJSONError(t *testing.T, response *http.Response, wantStatus int) {
 	}
 	if body["error"] == "" {
 		t.Fatalf("JSON error body = %#v, want non-empty error", body)
+	}
+}
+
+func serveAppJSON(t *testing.T, app *server, method, path string, value any) *httptest.ResponseRecorder {
+	t.Helper()
+	var body io.Reader
+	if value != nil {
+		data, err := json.Marshal(value)
+		if err != nil {
+			t.Fatalf("marshal JSON request: %v", err)
+		}
+		body = bytes.NewReader(data)
+	}
+	request := httptest.NewRequest(method, path, body)
+	if value != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, request)
+	return response
+}
+
+func assertRecorderJSONOK(t *testing.T, response *httptest.ResponseRecorder, wantStatus int) {
+	t.Helper()
+	if response.Code != wantStatus {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, wantStatus, response.Body.String())
+	}
+	if got := response.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("content type = %q, want application/json", got)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode JSON success: %v", err)
+	}
+	if ok, exists := body["ok"]; !exists || ok != true {
+		t.Fatalf("JSON success body = %#v, want ok=true", body)
+	}
+}
+
+func assertRecorderJSONError(t *testing.T, response *httptest.ResponseRecorder, wantStatus int, wantMessage string) {
+	t.Helper()
+	if response.Code != wantStatus {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, wantStatus, response.Body.String())
+	}
+	if got := response.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("content type = %q, want application/json", got)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode JSON error: %v", err)
+	}
+	if !strings.Contains(body["error"], wantMessage) {
+		t.Fatalf("JSON error = %q, want substring %q", body["error"], wantMessage)
 	}
 }
 
