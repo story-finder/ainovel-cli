@@ -14,6 +14,7 @@
     '"': "&quot;",
     "'": "&#39;",
   };
+  const MAX_BLOCKQUOTE_DEPTH = 64;
 
   function escapeHTML(value) {
     return String(value).replace(/[&<>"']/g, (character) => HTML_ESCAPES[character]);
@@ -226,6 +227,34 @@
     return expression.test(line);
   }
 
+  function stripBlockquotePrefix(line) {
+    const match = line.match(/^((?: {0,3}>[ \t]?)+)/);
+    if (!match) {
+      return { depth: 0, text: line };
+    }
+    return {
+      depth: Math.min(MAX_BLOCKQUOTE_DEPTH, (match[1].match(/>/g) || []).length),
+      text: line.slice(match[1].length),
+    };
+  }
+
+  function renderBlockquote(lines, start) {
+    const content = [];
+    let depth = 1;
+    let index = start;
+    while (index < lines.length && /^ {0,3}>[ \t]?/.test(lines[index])) {
+      const stripped = stripBlockquotePrefix(lines[index]);
+      depth = Math.max(depth, stripped.depth);
+      content.push(stripped.text);
+      index += 1;
+    }
+
+    return {
+      html: `${"<blockquote>\n".repeat(depth)}${renderBlocks(content)}${"\n</blockquote>".repeat(depth)}`,
+      end: index,
+    };
+  }
+
   function blockStart(line) {
     return Boolean(
       fenceStart(line) ||
@@ -292,12 +321,9 @@
       }
 
       if (/^ {0,3}>[ \t]?/.test(lines[index])) {
-        const quote = [];
-        while (index < lines.length && /^ {0,3}>[ \t]?/.test(lines[index])) {
-          quote.push(lines[index].replace(/^ {0,3}>[ \t]?/, ""));
-          index += 1;
-        }
-        blocks.push(`<blockquote>\n${renderBlocks(quote)}\n</blockquote>`);
+        const quote = renderBlockquote(lines, index);
+        blocks.push(quote.html);
+        index = quote.end;
         continue;
       }
 

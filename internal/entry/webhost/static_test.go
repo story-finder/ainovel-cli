@@ -52,6 +52,7 @@ func TestMarkdownAssetContainsSanitizedRenderer(t *testing.T) {
 		"function escapeHTML",
 		"(?:javascript|data):",
 		"container.innerHTML = renderMarkdown(markdown)",
+		"MAX_BLOCKQUOTE_DEPTH",
 		"renderInto",
 	} {
 		if !strings.Contains(content, want) {
