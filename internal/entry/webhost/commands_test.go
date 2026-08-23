@@ -40,13 +40,23 @@ func TestWebCommandCatalogMatchesApprovedTUICommands(t *testing.T) {
 	if len(got) != len(want) {
 		t.Fatalf("catalog length = %d, want %d: %#v", len(got), len(want), got)
 	}
+	seen := make(map[string]int, len(got))
 	for _, item := range got {
+		seen[item.Name]++
+		if seen[item.Name] > 1 {
+			t.Fatalf("/%s appears %d times, want exactly once", item.Name, seen[item.Name])
+		}
 		expected, ok := want[item.Name]
 		if !ok {
 			t.Fatalf("unexpected web command /%s", item.Name)
 		}
 		if item.Usage != expected.usage || item.Description != expected.description {
 			t.Fatalf("/%s = usage %q, description %q; want usage %q, description %q", item.Name, item.Usage, item.Description, expected.usage, expected.description)
+		}
+	}
+	for name := range want {
+		if seen[name] != 1 {
+			t.Fatalf("/%s appears %d times, want exactly once", name, seen[name])
 		}
 	}
 }
