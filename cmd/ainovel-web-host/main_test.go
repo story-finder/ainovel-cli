@@ -27,3 +27,12 @@ func TestParseOptionsRejectsInvalidAddress(t *testing.T) {
 		t.Fatal("parseOptions invalid address error = nil, want host:port validation error")
 	}
 }
+
+func TestParseOptionsRejectsAddressWithWhitespaceInHost(t *testing.T) {
+	if _, err := parseOptions([]string{
+		"--config", "missing.json",
+		"--addr", "foo bar:8080",
+	}); err == nil {
+		t.Fatal("parseOptions malformed address error = nil, want host validation error")
+	}
+}
