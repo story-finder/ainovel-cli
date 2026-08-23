@@ -86,7 +86,7 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	subscription := s.hub.subscribe(lastEventID(r))
+	subscription := s.hub.subscribeWithEpoch(lastEventID(r), strings.TrimSpace(r.URL.Query().Get("epoch")))
 	defer subscription.Cancel()
 
 	header := w.Header()
@@ -97,6 +97,10 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	if err := writeSSEDirective(w, flusher, "retry: 3000\n\n"); err != nil {
+		return
+	}
+	epoch, _ := json.Marshal(map[string]string{"epoch": s.hub.epoch})
+	if err := writeSSEFrame(w, flusher, frame{Event: "session", Data: epoch}); err != nil {
 		return
 	}
 	if subscription.Reset {

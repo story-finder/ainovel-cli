@@ -60,6 +60,18 @@ func TestHubRequestsResetWhenLastIDBelongsToPreviousProcess(t *testing.T) {
 	}
 }
 
+func TestHubRequestsResetWhenSessionEpochChanges(t *testing.T) {
+	hub := newEventHub(8)
+	hub.publish("runtime_replay", "persisted")
+
+	sub := hub.subscribeWithEpoch(1, "previous-process")
+	defer sub.Cancel()
+
+	if !sub.Reset {
+		t.Fatal("subscribe did not request a reset for a previous session epoch")
+	}
+}
+
 func TestHubStartsAfterPersistedRuntimeSequence(t *testing.T) {
 	hub := newEventHubWithNextID(8, 42)
 	frame := hub.publish("runtime_replay", "new")

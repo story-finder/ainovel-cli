@@ -2,7 +2,9 @@ package webhost
 
 import (
 	"encoding/json"
+	"strconv"
 	"sync"
+	"time"
 )
 
 type frame struct {
@@ -23,6 +25,7 @@ type eventHub struct {
 	mu            sync.Mutex
 	limit         int
 	nextID        int64
+	epoch         string
 	history       []frame
 	lastDroppedID int64
 	clients       map[chan frame]struct{}
@@ -41,6 +44,7 @@ func newEventHubWithNextID(limit int, nextID int64) *eventHub {
 	return &eventHub{
 		limit:   limit,
 		nextID:  nextID,
+		epoch:   strconv.FormatInt(time.Now().UnixNano(), 36),
 		clients: make(map[chan frame]struct{}),
 	}
 }
@@ -72,6 +76,10 @@ func (h *eventHub) publish(event string, value any) frame {
 }
 
 func (h *eventHub) subscribe(after int64) subscription {
+	return h.subscribeWithEpoch(after, "")
+}
+
+func (h *eventHub) subscribeWithEpoch(after int64, epoch string) subscription {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -91,7 +99,7 @@ func (h *eventHub) subscribe(after int64) subscription {
 
 	if after == 0 {
 		sub.Replay = append([]frame(nil), h.history...)
-	} else if after > h.nextID || (len(h.history) > 0 && after < h.lastDroppedID) {
+	} else if (epoch != "" && epoch != h.epoch) || after > h.nextID || (len(h.history) > 0 && after < h.lastDroppedID) {
 		sub.Reset = true
 		sub.ResetID = h.nextIDLocked()
 	} else if len(h.history) > 0 {

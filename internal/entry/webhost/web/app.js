@@ -101,6 +101,7 @@
     coCreatePending: false,
     detailsOpen: false,
     eventSource: null,
+    eventEpoch: null,
   };
   const elements = {};
 
@@ -324,7 +325,10 @@
 
   function connectEvents() {
     if (state.eventSource) state.eventSource.close();
-    const eventURL = lastEventID === null ? "/events" : `/events?after=${encodeURIComponent(lastEventID)}`;
+    const epochQuery = state.eventEpoch ? `&epoch=${encodeURIComponent(state.eventEpoch)}` : "";
+    const eventURL = lastEventID === null
+      ? (state.eventEpoch ? `/events?epoch=${encodeURIComponent(state.eventEpoch)}` : "/events")
+      : `/events?after=${encodeURIComponent(lastEventID)}${epochQuery}`;
     const source = new EventSource(eventURL);
     const eventSource = source;
     state.eventSource = eventSource;
@@ -347,6 +351,7 @@
     onEvent("command_result", (payload) => { addCommandResult(payload); refreshStatus(); });
     onEvent("terminal", (payload) => { finishAssistant(); renderStatus({ host: payload }); refreshStatus(); });
     onEvent("question", (payload) => renderQuestionFrame(payload));
+    onEvent("session", (payload) => { state.eventEpoch = text(get(payload, "epoch", "Epoch"), state.eventEpoch); });
     onEvent("reset", () => {
       lastEventID = null;
       finishAssistant();

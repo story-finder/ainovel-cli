@@ -95,9 +95,25 @@ func openSSERequest(t *testing.T, handler http.Handler, target, lastEventID stri
 		_ = writer.Close()
 	}()
 	go readSSEFrames(reader, client.frames)
+	consumeSessionFrame(t, client)
 
 	t.Cleanup(client.Close)
 	return client
+}
+
+func consumeSessionFrame(t *testing.T, client *sseClient) {
+	t.Helper()
+	select {
+	case result := <-client.frames:
+		if result.err != nil {
+			t.Fatalf("read SSE session frame: %v", result.err)
+		}
+		if result.frame.Event != "session" {
+			client.frames <- result
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SSE session frame")
+	}
 }
 
 func (c *sseClient) Close() {
