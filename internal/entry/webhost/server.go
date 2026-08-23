@@ -670,7 +670,7 @@ func (s *server) startColdCoCreate(initial string) error {
 		cancel()
 		return errCoCreateClosed
 	}
-	if s.coCreateActive || s.coCreateInFlight || (s.coCreateStage && s.coCreateSession != nil) {
+	if s.coCreateSession != nil || s.coCreateActive || s.coCreateInFlight {
 		s.coCreateMu.Unlock()
 		cancel()
 		return errCoCreateActive
@@ -891,10 +891,8 @@ func (s *server) coCreateStageActive() bool {
 }
 
 func (s *server) startCoCreateMessage(text string) (bool, error) {
-	rt, ok := s.rt.(stageCoCreateRuntime)
-	if !ok {
-		return false, errCoCreateCapabilityUnavailable
-	}
+	coldRT, coldCapable := s.rt.(coCreateRuntime)
+	stageRT, stageCapable := s.rt.(stageCoCreateRuntime)
 	ctx, cancel := context.WithCancel(s.commandCtx)
 	s.coCreateMu.Lock()
 	if s.coCreateClosed {
@@ -902,10 +900,16 @@ func (s *server) startCoCreateMessage(text string) (bool, error) {
 		cancel()
 		return false, errCoCreateClosed
 	}
-	if !s.coCreateStage || !s.coCreateActive || s.coCreateSession == nil || s.coCreateInFlight {
+	if s.coCreateSession == nil || s.coCreateInFlight || (s.coCreateStage && !s.coCreateActive) {
 		s.coCreateMu.Unlock()
 		cancel()
 		return false, errCoCreateActive
+	}
+	stage := s.coCreateStage
+	if (stage && !stageCapable) || (!stage && !coldCapable) {
+		s.coCreateMu.Unlock()
+		cancel()
+		return false, errCoCreateCapabilityUnavailable
 	}
 	s.coCreateSession.AppendUser(text)
 	s.coCreateGeneration++
@@ -921,7 +925,15 @@ func (s *server) startCoCreateMessage(text string) (bool, error) {
 	if err := s.launchCommand(func(_ context.Context) {
 		defer close(done)
 		defer cancel()
-		reply, streamErr := rt.StageCoCreateStream(ctx, history, func(kind, text string) {
+		stream := func(context.Context, []host.CoCreateMessage, func(string, string)) (host.CoCreateReply, error) {
+			return host.CoCreateReply{}, errCoCreateCapabilityUnavailable
+		}
+		if stage {
+			stream = stageRT.StageCoCreateStream
+		} else {
+			stream = coldRT.CoCreateStream
+		}
+		reply, streamErr := stream(ctx, history, func(kind, text string) {
 			s.publishCoCreate(generation, session, commandProgressFrame{
 				Command: "cocreate",
 				Text:    text,
@@ -944,9 +956,13 @@ func (s *server) startCoCreateMessage(text string) (bool, error) {
 		s.coCreateInFlight = false
 		s.coCreateCancel = nil
 		if streamErr != nil {
+			prefix := "Đồng sáng tác"
+			if stage {
+				prefix = "Đồng sáng tác giai đoạn"
+			}
 			s.hub.publish("command_result", commandResultFrame{
 				Command:  "cocreate",
-				Markdown: fmt.Sprintf("Đồng sáng tác giai đoạn thất bại: %v", streamErr),
+				Markdown: fmt.Sprintf("%s thất bại: %v", prefix, streamErr),
 				Error:    streamErr.Error(),
 				Level:    "error",
 				Done:     true,

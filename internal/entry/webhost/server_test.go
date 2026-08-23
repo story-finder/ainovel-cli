@@ -1175,6 +1175,59 @@ func TestStartCoCreateRejectsConcurrentSession(t *testing.T) {
 	close(rt.release)
 }
 
+func TestColdCoCreateMessageUsesSameSessionAndColdStream(t *testing.T) {
+	rt := newCoCreateRuntimeFake()
+	rt.release = nil
+	app := newServer(rt, 8)
+	t.Cleanup(app.Close)
+
+	start := serveAppJSON(t, app, http.MethodPost, "/commands", map[string]any{
+		"action": "start", "mode": "cocreate", "text": "Một ý tưởng truyện",
+	})
+	assertRecorderJSONOK(t, start, http.StatusAccepted)
+	initialResult := waitForFrame(t, app.hub, "command_result")
+
+	followUp := serveAppJSON(t, app, http.MethodPost, "/commands", map[string]any{
+		"action": "cocreate_message", "text": "Thêm một bước ngoặt",
+	})
+	assertRecorderJSONOK(t, followUp, http.StatusAccepted)
+	_ = waitForFrameAfter(t, app.hub, initialResult.ID, "command_result")
+
+	rt.mu.Lock()
+	history := append([]host.CoCreateMessage(nil), rt.history...)
+	stageHistory := append([]host.CoCreateMessage(nil), rt.stageHistory...)
+	rt.mu.Unlock()
+	want := []host.CoCreateMessage{
+		{Role: "user", Content: "Một ý tưởng truyện"},
+		{Role: "assistant", Content: rt.reply.Message},
+		{Role: "user", Content: "Thêm một bước ngoặt"},
+	}
+	if !reflect.DeepEqual(history, want) {
+		t.Fatalf("cold message history = %#v, want %#v", history, want)
+	}
+	if len(stageHistory) != 0 {
+		t.Fatalf("cold message used staged history = %#v", stageHistory)
+	}
+}
+
+func TestColdCoCreateSessionRejectsReplacementAfterReply(t *testing.T) {
+	rt := newCoCreateRuntimeFake()
+	rt.release = nil
+	app := newServer(rt, 8)
+	t.Cleanup(app.Close)
+
+	start := serveAppJSON(t, app, http.MethodPost, "/commands", map[string]any{
+		"action": "start", "mode": "cocreate", "text": "Ý tưởng đầu tiên",
+	})
+	assertRecorderJSONOK(t, start, http.StatusAccepted)
+	_ = waitForFrame(t, app.hub, "command_result")
+
+	replacement := serveAppJSON(t, app, http.MethodPost, "/commands", map[string]any{
+		"action": "start", "mode": "cocreate", "text": "Ý tưởng thay thế",
+	})
+	assertRecorderJSONError(t, replacement, http.StatusConflict, "đang")
+}
+
 func TestCloseWaitsForColdCoCreateAndSuppressesStaleResult(t *testing.T) {
 	rt := newCoCreateRuntimeFake()
 	rt.finished = make(chan struct{})

@@ -10,20 +10,83 @@
     { name: "cocreate", usage: "/cocreate", description: "Tạm dừng để cùng lên kế hoạch giai đoạn tiếp theo" },
   ];
   const roles = ["default", "coordinator", "architect", "writer", "editor"];
+  const roleLabels = {
+    default: "Mặc định",
+    coordinator: "Điều phối viên",
+    architect: "Kiến trúc sư",
+    writer: "Người viết",
+    editor: "Biên tập viên",
+  };
+  const statusLabelMap = {
+    ready: "Sẵn sàng",
+    running: "Đang chạy",
+    review: "Đang đánh giá",
+    rewrite: "Đang viết lại",
+    complete: "Đã hoàn thành",
+    paused: "Đã tạm dừng",
+  };
+  const phaseLabels = {
+    init: "Khởi tạo",
+    premise: "Tiền đề",
+    outline: "Đề cương",
+    writing: "Đang sáng tác",
+    complete: "Hoàn tất",
+  };
+  const flowLabels = {
+    writing: "Đang viết",
+    reviewing: "Đang đánh giá",
+    rewriting: "Đang viết lại",
+    polishing: "Đang hoàn thiện",
+    steering: "Đang điều chỉnh",
+  };
+  const runtimeStateLabels = {
+    idle: "Đang chờ",
+    running: "Đang chạy",
+    pausing: "Đang tạm dừng",
+    paused: "Đã tạm dừng",
+    completed: "Đã hoàn thành",
+  };
+  const agentStateLabels = {
+    idle: "Đang chờ",
+    working: "Đang làm việc",
+    thinking: "Đang suy nghĩ",
+    tool: "Đang dùng công cụ",
+    complete: "Đã hoàn tất",
+    error: "Gặp lỗi",
+  };
+  const agentLabels = {
+    coordinator: "Điều phối viên",
+    architect: "Kiến trúc sư",
+    architect_long: "Kiến trúc sư dài hạn",
+    architect_short: "Kiến trúc sư ngắn hạn",
+    writer: "Người viết",
+    editor: "Biên tập viên",
+    subagent: "Tác vụ phụ",
+  };
+  const commandLabels = {
+    cocreate: "Đồng sáng tác",
+    cocreate_apply: "Áp dụng đồng sáng tác",
+    cocreate_cancel: "Thoát đồng sáng tác",
+    model: "Mô hình",
+    diag: "Chẩn đoán",
+    export: "Xuất truyện",
+    import: "Nhập truyện",
+    simulate: "Mô phỏng",
+  };
+  let latestStatusRequestID = 0;
+  let questionRevision = 0;
+  let lastEventID = null;
   const state = {
     messages: [{ kind: "assistant", text: "Sẵn sàng đồng hành cùng bạn. Hãy mô tả ý tưởng, nhân vật hoặc cảnh mở đầu để bắt đầu." }],
     streamingIndex: -1,
     commandIndex: 0,
     pendingQuestion: null,
-    lastEventID: null,
     statusTimer: null,
     status: null,
     started: false,
     coCreateActive: false,
     detailsOpen: false,
     eventSource: null,
-    questionRevision: 0,
-    statusRequest: 0,
   };
   const elements = {};
 
@@ -36,15 +99,24 @@
     }
     return undefined;
   };
+  const field = get;
   const text = (value, fallback = "") => value === undefined || value === null || value === "" ? fallback : String(value);
   const number = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
   const formatNumber = (value) => number(value).toLocaleString("vi-VN");
-  const formatMoney = (value) => `${number(value).toFixed(4)} USD`;
+  const formatMoney = (value) => `${number(value).toFixed(4)} đô la Mỹ`;
   const formatError = (error, fallback = "Đã xảy ra lỗi.") => error && error.message ? error.message : fallback;
+  const translate = (value, labels, fallback = "Chưa có dữ liệu") => {
+    const key = String(value || "").trim().toLowerCase();
+    if (!key) return fallback;
+    return labels[key] || "Chưa xác định";
+  };
+  const commandLabel = (value) => translate(value, commandLabels, "Máy chủ");
+  const agentLabel = (value) => translate(value, agentLabels, "Tác vụ");
+  const roleLabel = (value) => translate(value, roleLabels, "Vai trò khác");
 
   function rememberEventID(event) {
     const raw = event && event.lastEventId;
-    if (/^\d+$/.test(raw || "")) state.lastEventID = Number(raw);
+    if (/^\d+$/.test(raw || "")) lastEventID = Number(raw);
   }
 
   function setError(message) {
@@ -147,14 +219,19 @@
     const suggestions = get(payload, "suggestions", "Suggestions");
     const command = text(get(payload, "command", "Command"));
     if (prompt || command === "/cocreate" || command === "cocreate") state.coCreateActive = true;
+    if (command === "cocreate_apply") state.coCreateActive = Boolean(error);
+    if (command === "cocreate_cancel" && !error) state.coCreateActive = false;
+    const resultSections = [];
+    if (markdown || error) resultSections.push(markdown || error);
+    if (prompt) resultSections.push(`## Bản nháp chỉ thị\n\n${prompt}`);
     const actions = [];
     if (ready && prompt) actions.push({ label: "Áp dụng và tiếp tục", handler: () => postInternal("cocreate_apply", prompt) });
     if (state.coCreateActive) actions.push({ label: "Thoát đồng sáng tác", secondary: true, handler: () => postInternal("cocreate_cancel", "") });
     state.messages.push({
       kind: "result",
-      author: command || "Máy chủ",
+      author: commandLabel(command),
       label: error ? "Lỗi" : "Kết quả lệnh",
-      markdown: markdown || error,
+      markdown: resultSections.join("\n\n"),
       actions: actions.length ? actions : undefined,
     });
     if (Array.isArray(suggestions)) addSuggestions(suggestions);
@@ -178,12 +255,25 @@
     });
   }
 
+  function replayRuntime(item) {
+    const kind = text(field(item, "kind", "Kind")).toLowerCase();
+    const payload = field(item, "payload", "Payload") || {};
+    if (kind === "stream_clear") {
+      startAssistantMessage();
+      return;
+    }
+    if (kind === "stream_delta") {
+      appendAssistantDelta(text(field(payload, "delta", "Delta"), field(payload, "text", "Text")));
+    }
+  }
+
   function connectEvents() {
     if (state.eventSource) state.eventSource.close();
-    const query = state.lastEventID === null ? "" : `?after=${encodeURIComponent(state.lastEventID)}`;
-    const source = new EventSource(`/events${query}`);
-    state.eventSource = source;
-    elements.eventSource = source;
+    const eventURL = lastEventID === null ? "/events" : `/events?after=${encodeURIComponent(lastEventID)}`;
+    const source = new EventSource(eventURL);
+    const eventSource = source;
+    state.eventSource = eventSource;
+    elements.eventSource = eventSource;
     source.addEventListener("open", () => setError(""));
     onEvent("stream_clear", () => startAssistantMessage());
     onEvent("stream_delta", (payload) => appendAssistantDelta(text(get(payload, "text", "Text"))));
@@ -201,28 +291,37 @@
     });
     onEvent("command_result", (payload) => { addCommandResult(payload); refreshStatus(); });
     onEvent("terminal", (payload) => { finishAssistant(); renderStatus({ host: payload }); refreshStatus(); });
-    onEvent("question", (payload) => renderQuestion(payload));
+    onEvent("question", (payload) => renderQuestionFrame(payload));
     onEvent("reset", () => refreshStatus());
-    onEvent("runtime_replay", () => {});
-    onEvent("heartbeat", () => {});
+    onEvent("runtime_replay", replayRuntime);
+    eventSource.addEventListener("heartbeat", rememberEventID);
+    eventSource.addEventListener("runtime_replay", rememberEventID);
     source.addEventListener("error", () => setError("Luồng sự kiện đã ngắt, đang thử kết nối lại…"));
   }
 
-  function stateLabel(value) {
-    return ({ running: "Đang chạy", writing: "Đang viết", reviewing: "Đang đánh giá", rewriting: "Đang viết lại", polishing: "Đang đánh bóng", paused: "Đã tạm dừng", completed: "Đã hoàn thành", idle: "Đang chờ", pausing: "Đang tạm dừng" })[String(value || "").toLowerCase()] || text(value, "Chưa có dữ liệu");
-  }
+  function runtimeLabel(value) { return translate(value, runtimeStateLabels); }
+  function stateLabel(value) { return translate(value, agentStateLabels); }
+  function statusLabel(value) { return translate(value, statusLabelMap); }
+  function phaseLabel(value) { return translate(value, phaseLabels); }
+  function flowLabel(value) { return translate(value, flowLabels); }
 
   function setField(id, value) { if (elements[id]) elements[id].textContent = text(value, "Chưa có dữ liệu"); }
   function percentage(value) { return `${Math.max(0, Math.min(100, number(value))).toFixed(1)}%`; }
 
-  function renderStatus(payload) {
+  function renderStatus(payload, requestID, requestRevision) {
+    if (requestID !== undefined) {
+      if (requestID !== latestStatusRequestID || requestRevision !== questionRevision) {
+        return;
+      }
+    }
     const snapshot = get(payload, "host", "Host") || payload || {};
     state.status = snapshot;
     state.started = Boolean(get(snapshot, "isRunning", "IsRunning")) || ["running", "writing", "reviewing", "rewriting", "polishing"].includes(String(get(snapshot, "runtimeState", "RuntimeState")).toLowerCase());
-    const runtime = stateLabel(get(snapshot, "runtimeState", "RuntimeState"));
-    setField("statusText", text(get(snapshot, "statusLabel", "StatusLabel"), runtime));
-    setField("statusPhase", get(snapshot, "phase", "Phase"));
-    setField("statusThread", get(snapshot, "flow", "Flow"));
+    const runtime = runtimeLabel(get(snapshot, "runtimeState", "RuntimeState"));
+    const translatedStatus = statusLabel(get(snapshot, "statusLabel", "StatusLabel"));
+    setField("statusText", translatedStatus === "Chưa xác định" || translatedStatus === "Chưa có dữ liệu" ? runtime : translatedStatus);
+    setField("statusPhase", phaseLabel(get(snapshot, "phase", "Phase")));
+    setField("statusThread", flowLabel(get(snapshot, "flow", "Flow")));
     setField("statusModel", get(snapshot, "modelName", "ModelName"));
     const current = number(get(snapshot, "currentChapter", "CurrentChapter"));
     const total = number(get(snapshot, "totalChapters", "TotalChapters"));
@@ -233,7 +332,7 @@
     setField("statusConnection", "Đã kết nối");
     const agents = get(snapshot, "agents", "Agents");
     const active = Array.isArray(agents) ? agents.find((agent) => String(get(agent, "state", "State")).toLowerCase() !== "idle") || agents[0] : null;
-    setField("statusAgent", active ? `${text(get(active, "name", "Name"))} · ${stateLabel(get(active, "state", "State"))}` : "Không có");
+    setField("statusAgent", active ? `${agentLabel(get(active, "name", "Name"))} · ${stateLabel(get(active, "state", "State"))}` : "Không có");
     setField("statusTool", active ? get(active, "tool", "Tool") : "Không có");
     setField("statusChapter", total ? `${current}/${total} · ${formatNumber(get(snapshot, "totalWordCount", "TotalWordCount"))} từ` : "Chưa có dữ liệu");
     const contextWindow = get(snapshot, "contextWindow", "ContextWindow");
@@ -257,6 +356,14 @@
     elements.pauseButton.hidden = !state.started;
     elements.resumeButton.textContent = recovery ? "Tiếp tục khôi phục" : "Tiếp tục";
     if (recovery) addRecoveryNotice(recovery);
+    if (payload && (Object.prototype.hasOwnProperty.call(payload, "pending") || Object.prototype.hasOwnProperty.call(payload, "Pending"))) {
+      const pending = field(payload, "pending", "Pending");
+      if (pending) {
+        renderQuestionFrame(pending);
+      } else {
+        clearQuestionFrame();
+      }
+    }
   }
 
   let recoveryNotice = false;
@@ -268,11 +375,14 @@
   }
 
   async function refreshStatus() {
-    const request = ++state.statusRequest;
+    const requestID = ++latestStatusRequestID;
+    const requestRevision = questionRevision;
     try {
       const payload = await requestJSON("/status");
-      if (request === state.statusRequest) renderStatus(payload);
-    } catch (error) { if (request === state.statusRequest) setError(formatError(error, "Không thể tải trạng thái máy chủ.")); }
+      if (requestID === latestStatusRequestID && requestRevision === questionRevision) {
+        renderStatus(payload, requestID, requestRevision);
+      }
+    } catch (error) { if (requestID === latestStatusRequestID && requestRevision === questionRevision) setError(formatError(error, "Không thể tải trạng thái máy chủ.")); }
   }
 
   function toggleDetails(force) {
@@ -322,7 +432,7 @@
       const list = get(payload, "roles", "Roles");
       if (Array.isArray(list)) {
         elements.roleSelector.replaceChildren();
-        list.forEach((item) => { const option = document.createElement("option"); option.value = item; option.textContent = ({ default: "Mặc định", coordinator: "Điều phối viên", architect: "Kiến trúc sư", writer: "Người viết", editor: "Biên tập viên" })[item] || item; elements.roleSelector.appendChild(option); });
+        list.forEach((item) => { const option = document.createElement("option"); option.value = item; option.textContent = roleLabel(item); elements.roleSelector.appendChild(option); });
         elements.roleSelector.value = role;
       }
       elements.providerSelector.replaceChildren();
@@ -349,19 +459,30 @@
     event.preventDefault();
     const role = elements.roleSelector.value || "default";
     const slash = role === "default" ? "/model" : `/model ${role}`;
-    await postCommand(slash, { provider: elements.providerSelector.value, model: elements.modelSelector.value });
-    elements.modelPanel.hidden = true;
+    if (await postCommand(slash, { provider: elements.providerSelector.value, model: elements.modelSelector.value })) elements.modelPanel.hidden = true;
   }
 
   async function postCommand(command, extra = {}) {
     addUserMessage(command);
-    try { await requestJSON("/commands", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "command", text: command, ...extra }) }); setError(""); }
-    catch (error) { setError(formatError(error, "Không thể thực hiện lệnh.")); }
+    try { await requestJSON("/commands", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "command", text: command, ...extra }) }); setError(""); return true; }
+    catch (error) { setError(formatError(error, "Không thể thực hiện lệnh.")); return false; }
   }
 
   async function postInternal(action, value) {
-    try { await requestJSON("/commands", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, text: value }) }); setError(""); }
-    catch (error) { setError(formatError(error, "Không thể thực hiện thao tác.")); }
+    try {
+      await requestJSON("/commands", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, text: value }) });
+      if (["cocreate_apply", "cocreate_cancel"].includes(action)) state.coCreateActive = false;
+      setError("");
+      return true;
+    } catch (error) { setError(formatError(error, "Không thể thực hiện thao tác.")); return false; }
+  }
+
+  function freeTextAction() {
+    if (state.coCreateActive) return "cocreate_message";
+    const runtimeState = String(get(state.status, "runtimeState", "RuntimeState") || "").toLowerCase();
+    if (["paused", "completed"].includes(runtimeState)) return "continue";
+    if (!state.status || runtimeState === "idle") return "start";
+    return state.started ? "steer" : "start";
   }
 
   async function submitComposer(event) {
@@ -375,17 +496,26 @@
       await postCommand(value); return;
     }
     addUserMessage(value);
-    const action = state.coCreateActive ? "cocreate_message" : !state.started ? "start" : state.status && ["paused", "completed", "idle"].includes(String(get(state.status, "runtimeState", "RuntimeState")).toLowerCase()) ? "continue" : "steer";
+    const action = freeTextAction();
     const body = { action, text: value };
     if (action === "start") body.mode = elements.startupMode.value || "quick";
     try { await requestJSON("/commands", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); setError(""); }
     catch (error) { setError(formatError(error, "Không thể gửi yêu cầu.")); }
   }
 
-  function renderQuestion(frame) {
+  function clearQuestionFrame() {
+    questionRevision++;
+    state.pendingQuestion = null;
+    elements.questionItems.replaceChildren();
+    elements.question.hidden = true;
+    elements.questionError.textContent = "";
+  }
+
+  function renderQuestionFrame(frame) {
     const id = text(get(frame, "id", "ID"));
     const questions = get(frame, "questions", "Questions");
     if (!id || !Array.isArray(questions)) { setError("Câu hỏi từ máy chủ không hợp lệ."); return; }
+    questionRevision++;
     state.pendingQuestion = { id, questions };
     elements.questionItems.replaceChildren();
     questions.forEach((question, index) => {
@@ -401,16 +531,81 @@
   async function answerQuestion(event) {
     event.preventDefault(); if (!state.pendingQuestion) return;
     const answers = {}; const notes = {}; let invalid = false;
-    state.pendingQuestion.questions.forEach((question, index) => { const key = text(get(question, "question", "Question")); const selected = [...elements.questionItems.querySelectorAll(`input[name="question-${index}"]:checked`)].map((item) => item.value); const custom = elements.questionItems.querySelector(`input[data-custom="${index}"]`); if (custom && custom.value.trim()) selected.push(custom.value.trim()); if (!selected.length) invalid = true; else answers[key] = selected.join(", "); if (custom && custom.value.trim()) notes[key] = custom.value.trim(); });
+    state.pendingQuestion.questions.forEach((question, index) => {
+      const questionText = text(get(question, "question", "Question"));
+      const multiSelect = Boolean(get(question, "multiSelect", "MultiSelect"));
+      let selected = [...elements.questionItems.querySelectorAll(`input[name="question-${index}"]:checked`)].map((item) => item.value);
+      const custom = elements.questionItems.querySelector(`input[data-custom="${index}"]`);
+      const customText = custom ? custom.value.trim() : "";
+      if (customText) {
+        if (multiSelect) {
+          selected.push(customText);
+        } else {
+          selected = [customText];
+        }
+        notes[questionText] = customText;
+      }
+      if (!selected.length) invalid = true; else answers[questionText] = selected.join(", ");
+    });
     if (invalid) { elements.questionError.textContent = "Bạn hãy trả lời tất cả câu hỏi."; return; }
-    try { await requestJSON(`/questions/${encodeURIComponent(state.pendingQuestion.id)}/answer`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ answers, notes }) }); state.pendingQuestion = null; elements.question.hidden = true; elements.questionError.textContent = ""; } catch (error) { elements.questionError.textContent = formatError(error, "Không thể gửi lựa chọn."); }
+    try { await requestJSON(`/questions/${encodeURIComponent(state.pendingQuestion.id)}/answer`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ answers, notes }) }); clearQuestionFrame(); } catch (error) { elements.questionError.textContent = formatError(error, "Không thể gửi lựa chọn."); }
   }
 
   function bind() {
-    elements.transcript = document.getElementById("transcript"); elements.serverError = document.getElementById("server-error"); elements.statusText = document.getElementById("status-text"); elements.statusPhase = document.getElementById("status-phase"); elements.statusThread = document.getElementById("status-thread"); elements.statusModel = document.getElementById("status-model"); elements.statusProgress = document.getElementById("status-progress"); elements.statusDetails = document.getElementById("status-details"); elements.statusDetailsToggle = document.getElementById("status-details-toggle"); elements.progressText = document.getElementById("progress-text"); elements.progressBar = document.getElementById("progress-bar"); elements.resumeButton = document.getElementById("resume-button"); elements.pauseButton = document.getElementById("pause-button"); elements.reconnectButton = document.getElementById("reconnect-button"); elements.question = document.getElementById("question"); elements.questionItems = document.getElementById("question-items"); elements.questionError = document.getElementById("question-error"); elements.questionForm = document.getElementById("question-form"); elements.composerForm = document.getElementById("composer-form"); elements.composerInput = document.getElementById("composer-input"); elements.commandPalette = document.getElementById("command-palette"); elements.commandList = document.querySelector("#command-palette .command-list"); elements.startupMode = document.getElementById("startup-mode"); elements.modelPanel = document.getElementById("model-panel"); elements.roleSelector = document.getElementById("role-selector"); elements.providerSelector = document.getElementById("provider-selector"); elements.modelSelector = document.getElementById("model-selector"); elements.modelPanelClose = document.getElementById("model-panel-close"); elements.statusDetailsToggle.addEventListener("click", () => toggleDetails());
+    const elementIDs = {
+      transcript: "transcript",
+      serverError: "server-error",
+      statusText: "status-text",
+      statusPhase: "status-phase",
+      statusThread: "status-thread",
+      statusModel: "status-model",
+      statusProgress: "status-progress",
+      statusDetails: "status-details",
+      statusDetailsToggle: "status-details-toggle",
+      statusProvider: "status-provider",
+      statusModelDetail: "status-model-detail",
+      statusStyle: "status-style",
+      statusConnection: "status-connection",
+      statusAgent: "status-agent",
+      statusTool: "status-tool",
+      statusChapter: "status-chapter",
+      statusContext: "status-context",
+      statusContextUsed: "status-context-used",
+      statusWritingStyle: "status-writing-style",
+      statusUsage: "status-usage",
+      statusCost: "status-cost",
+      statusBudget: "status-budget",
+      statusCache: "status-cache",
+      statusCacheRead: "status-cache-read",
+      statusCacheWrite: "status-cache-write",
+      statusRewrites: "status-rewrites",
+      statusSteer: "status-steer",
+      statusRecovery: "status-recovery",
+      progressText: "progress-text",
+      progressBar: "progress-bar",
+      resumeButton: "resume-button",
+      pauseButton: "pause-button",
+      reconnectButton: "reconnect-button",
+      question: "question",
+      questionItems: "question-items",
+      questionError: "question-error",
+      questionForm: "question-form",
+      composerForm: "start-form",
+      composerInput: "composer-input",
+      commandPalette: "command-palette",
+      startupMode: "startup-mode",
+      modelPanel: "model-panel",
+      modelForm: "model-form",
+      roleSelector: "role-selector",
+      providerSelector: "provider-selector",
+      modelSelector: "model-selector",
+      modelPanelClose: "model-panel-close",
+    };
+    Object.entries(elementIDs).forEach(([name, id]) => { elements[name] = document.getElementById(id); });
+    elements.commandList = document.querySelector("#command-palette .command-list");
+    elements.statusDetailsToggle.addEventListener("click", () => toggleDetails());
     renderChat();
-    const modelApply = document.createElement("button"); modelApply.type = "button"; modelApply.textContent = "Áp dụng mô hình"; modelApply.addEventListener("click", submitModel); elements.modelPanel.querySelector(".selector-stack").appendChild(modelApply);
-    elements.composerForm.addEventListener("submit", submitComposer); elements.questionForm.addEventListener("submit", answerQuestion); document.getElementById("command-button").addEventListener("click", renderPalette); document.getElementById("model-panel-close").addEventListener("click", () => { elements.modelPanel.hidden = true; }); elements.roleSelector.addEventListener("change", () => loadModels(elements.roleSelector.value)); elements.providerSelector.addEventListener("change", populateModels); elements.reconnectButton.addEventListener("click", connectEvents); elements.pauseButton.addEventListener("click", () => postInternal("pause", "")); elements.resumeButton.addEventListener("click", () => postInternal("resume", ""));
+    elements.composerForm.addEventListener("submit", submitComposer); elements.questionForm.addEventListener("submit", answerQuestion); elements.modelForm.addEventListener("submit", submitModel); document.getElementById("command-button").addEventListener("click", renderPalette); elements.modelPanelClose.addEventListener("click", () => { elements.modelPanel.hidden = true; }); elements.roleSelector.addEventListener("change", () => loadModels(elements.roleSelector.value)); elements.providerSelector.addEventListener("change", populateModels); elements.reconnectButton.addEventListener("click", connectEvents); elements.pauseButton.addEventListener("click", () => postInternal("pause", "")); elements.resumeButton.addEventListener("click", () => postInternal("resume", ""));
     elements.composerInput.addEventListener("input", renderPalette); elements.composerInput.addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); elements.composerForm.requestSubmit(); } else if (event.key === "Tab") { event.preventDefault(); elements.startupMode.value = elements.startupMode.value === "quick" ? "cocreate" : "quick"; } else if (event.key === "Escape") { elements.composerInput.value = ""; elements.commandPalette.hidden = true; elements.modelPanel.hidden = true; toggleDetails(false); } });
     refreshStatus(); connectEvents(); state.statusTimer = window.setInterval(refreshStatus, 3000); window.addEventListener("beforeunload", () => { if (state.statusTimer) clearInterval(state.statusTimer); if (state.eventSource) state.eventSource.close(); });
   }

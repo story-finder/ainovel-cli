@@ -122,7 +122,7 @@
           </div>
           <button id="model-panel-close" class="icon-button" type="button" aria-label="Đóng bảng chọn mô hình">×</button>
         </div>
-        <div class="selector-stack">
+        <form id="model-form" class="selector-stack">
           <label for="role-selector">Vai trò
             <select id="role-selector" name="role">
               <option value="default">Mặc định</option>
@@ -142,7 +142,8 @@
               <option value="">Chưa chọn</option>
             </select>
           </label>
-        </div>
+          <button type="submit">Áp dụng mô hình</button>
+        </form>
         <p class="panel-hint">Các lựa chọn sẽ được cập nhật theo máy chủ.</p>
       </aside>
 
@@ -221,7 +222,7 @@
             </ol>
           </section>
 
-          <form id="composer-form" class="composer-form">
+          <form id="start-form" class="composer-form">
             <div class="composer-input-row">
               <label class="sr-only" for="composer-input">Nội dung tin nhắn</label>
               <textarea id="composer-input" name="text" rows="1" placeholder="Viết ý tưởng hoặc gõ / để xem lệnh…" autocomplete="off"></textarea>
@@ -237,7 +238,7 @@
                 </label>
               </div>
               <div class="toolbar-group toolbar-actions">
-                <button id="pause-button" class="secondary" type="button">Tạm dừng</button>
+                <button id="pause-button" class="secondary" type="button" title="Dừng lượt sáng tác đang chạy" aria-label="Dừng lượt sáng tác đang chạy">Tạm dừng</button>
                 <button id="resume-button" class="secondary" type="button" hidden>Tiếp tục</button>
                 <button id="reconnect-button" class="secondary" type="button">Kết nối lại</button>
                 <button id="send-button" type="submit">Gửi</button>
@@ -249,6 +250,7 @@
       </section>
     </div>
   </main>
+  <script src="/markdown.js" defer></script>
   <script src="/app.js" defer></script>
 </body>
 </html>
