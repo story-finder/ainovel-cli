@@ -31,7 +31,7 @@ func TestStaticAssetsUseRootRelativeRoutes(t *testing.T) {
 	app := newServer(newFakeRuntime(), 8)
 	t.Cleanup(app.Close)
 
-	for _, path := range []string{"/app.js", "/app.css"} {
+	for _, path := range []string{"/app.js", "/app.css", "/markdown.js"} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		response := httptest.NewRecorder()
 		app.Handler().ServeHTTP(response, request)
@@ -41,6 +41,21 @@ func TestStaticAssetsUseRootRelativeRoutes(t *testing.T) {
 		}
 		if response.Body.Len() == 0 {
 			t.Fatalf("GET %s returned an empty body", path)
+		}
+	}
+}
+
+func TestMarkdownAssetContainsSanitizedRenderer(t *testing.T) {
+	content := embeddedMarkdownJS(t)
+	for _, want := range []string{
+		"function renderMarkdown",
+		"function escapeHTML",
+		"(?:javascript|data):",
+		"container.innerHTML = renderMarkdown(markdown)",
+		"renderInto",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("web/markdown.js does not contain renderer safety assertion %q", want)
 		}
 	}
 }
@@ -119,4 +134,13 @@ func embeddedAppJS(t *testing.T) string {
 		t.Fatalf("read embedded web/app.js: %v", err)
 	}
 	return string(app)
+}
+
+func embeddedMarkdownJS(t *testing.T) string {
+	t.Helper()
+	markdown, err := webFS.ReadFile("web/markdown.js")
+	if err != nil {
+		t.Fatalf("read embedded web/markdown.js: %v", err)
+	}
+	return string(markdown)
 }

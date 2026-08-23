@@ -19,6 +19,8 @@ func (s *server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		path = "web/app.js"
 	case "/app.css":
 		path = "web/app.css"
+	case "/markdown.js":
+		path = "web/markdown.js"
 	default:
 		s.handleNotFound(w, r)
 		return
