@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/entry/startup"
@@ -44,19 +45,22 @@ type coCreateRuntime interface {
 }
 
 type server struct {
-	rt              runtime
-	mux             *http.ServeMux
-	hub             *eventHub
-	broker          *questionBroker
-	pumpCancel      context.CancelFunc
-	pumpDone        chan struct{}
-	closeOnce       sync.Once
-	commandMu       sync.Mutex
-	coCreateMu      sync.Mutex
-	coCreateSession *startup.CoCreateSession
-	coCreateCancel  context.CancelFunc
-	coCreateReply   host.CoCreateReply
-	coCreateActive  bool
+	rt                 runtime
+	mux                *http.ServeMux
+	hub                *eventHub
+	broker             *questionBroker
+	pumpCancel         context.CancelFunc
+	pumpDone           chan struct{}
+	closeOnce          sync.Once
+	commandMu          sync.Mutex
+	coCreateMu         sync.Mutex
+	coCreateSession    *startup.CoCreateSession
+	coCreateCancel     context.CancelFunc
+	coCreateReply      host.CoCreateReply
+	coCreateActive     bool
+	coCreateDone       chan struct{}
+	coCreateGeneration uint64
+	coCreateClosed     bool
 }
 
 func newServer(rt runtime, replayLimit int) *server {
@@ -125,18 +129,21 @@ func (s *server) handleModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	response := modelCatalogResponse{
+		Role:  role,
+		Roles: webModelRoleList(),
+	}
+
+	s.commandMu.Lock()
 	providers := append([]string(nil), rt.ConfiguredProviders()...)
 	sort.Strings(providers)
-	response := modelCatalogResponse{
-		Role:      role,
-		Roles:     webModelRoleList(),
-		Providers: make([]modelProviderResponse, 0, len(providers)),
-	}
+	response.Providers = make([]modelProviderResponse, 0, len(providers))
 	for _, provider := range providers {
 		models := append([]string(nil), rt.ConfiguredModels(provider)...)
 		if models == nil {
 			models = []string{}
 		}
+		sort.Strings(models)
 		response.Providers = append(response.Providers, modelProviderResponse{
 			Provider: provider,
 			Models:   models,
@@ -144,6 +151,8 @@ func (s *server) handleModels(w http.ResponseWriter, r *http.Request) {
 	}
 	provider, model, explicit := rt.CurrentModelSelection(role)
 	response.Current = modelSelectionResponse{Provider: provider, Model: model, Explicit: explicit}
+	s.commandMu.Unlock()
+
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -268,6 +277,9 @@ func (s *server) handleCommands(w http.ResponseWriter, r *http.Request) {
 var errModelCapabilityUnavailable = errors.New("runtime hiện tại không hỗ trợ chuyển mô hình")
 var errCoCreateCapabilityUnavailable = errors.New("runtime hiện tại không hỗ trợ đồng sáng tác")
 var errCoCreateActive = errors.New("đang có một lượt đồng sáng tác khác")
+var errCoCreateClosed = errors.New("web host đã đóng")
+
+const coCreateShutdownWait = time.Second
 
 func (s *server) startColdCoCreate(initial string) error {
 	rt, ok := s.rt.(coCreateRuntime)
@@ -278,29 +290,40 @@ func (s *server) startColdCoCreate(initial string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	session := startup.NewCoCreateSession(initial)
 	s.coCreateMu.Lock()
+	if s.coCreateClosed {
+		s.coCreateMu.Unlock()
+		cancel()
+		return errCoCreateClosed
+	}
 	if s.coCreateActive {
 		s.coCreateMu.Unlock()
 		cancel()
 		return errCoCreateActive
 	}
+	s.coCreateGeneration++
+	generation := s.coCreateGeneration
+	done := make(chan struct{})
 	s.coCreateActive = true
 	s.coCreateSession = session
 	s.coCreateCancel = cancel
 	s.coCreateReply = host.CoCreateReply{}
+	s.coCreateDone = done
 	s.coCreateMu.Unlock()
 
-	go s.runColdCoCreate(ctx, rt, session)
+	go func() {
+		defer close(done)
+		s.runColdCoCreate(ctx, rt, session, generation)
+	}()
 	return nil
 }
 
-func (s *server) runColdCoCreate(ctx context.Context, rt coCreateRuntime, session *startup.CoCreateSession) {
+func (s *server) runColdCoCreate(ctx context.Context, rt coCreateRuntime, session *startup.CoCreateSession, generation uint64) {
 	reply, err := rt.CoCreateStream(ctx, session.History(), func(kind, text string) {
 		s.coCreateMu.Lock()
-		if s.coCreateSession == session {
-			session.ApplyDelta(kind, text)
+		defer s.coCreateMu.Unlock()
+		if !s.coCreateCurrentLocked(generation, session) {
+			return
 		}
-		s.coCreateMu.Unlock()
-
 		s.hub.publish("command_progress", commandProgressFrame{
 			Command: "cocreate",
 			Text:    text,
@@ -310,15 +333,14 @@ func (s *server) runColdCoCreate(ctx context.Context, rt coCreateRuntime, sessio
 	})
 
 	s.coCreateMu.Lock()
-	if s.coCreateSession == session {
-		if err == nil {
-			session.ApplyReply(reply)
-			s.coCreateReply = reply
-		}
-		s.coCreateActive = false
-		s.coCreateCancel = nil
+	defer s.coCreateMu.Unlock()
+	if !s.coCreateCurrentLocked(generation, session) {
+		return
 	}
-	s.coCreateMu.Unlock()
+	if err == nil {
+		session.ApplyReply(reply)
+		s.coCreateReply = reply
+	}
 
 	if err != nil {
 		s.hub.publish("command_result", commandResultFrame{
@@ -328,6 +350,8 @@ func (s *server) runColdCoCreate(ctx context.Context, rt coCreateRuntime, sessio
 			Level:    "error",
 			Done:     true,
 		})
+		s.coCreateActive = false
+		s.coCreateCancel = nil
 		return
 	}
 
@@ -340,16 +364,41 @@ func (s *server) runColdCoCreate(ctx context.Context, rt coCreateRuntime, sessio
 		Level:       "success",
 		Done:        true,
 	})
+	s.coCreateActive = false
+	s.coCreateCancel = nil
 }
 
-func (s *server) cancelColdCoCreate() {
+func (s *server) coCreateCurrentLocked(generation uint64, session *startup.CoCreateSession) bool {
+	return !s.coCreateClosed && s.coCreateGeneration == generation && s.coCreateSession == session
+}
+
+func (s *server) shutdownColdCoCreate() {
 	s.coCreateMu.Lock()
-	defer s.coCreateMu.Unlock()
-	if s.coCreateCancel != nil {
-		s.coCreateCancel()
-		s.coCreateCancel = nil
+	s.coCreateClosed = true
+	cancel := s.coCreateCancel
+	done := s.coCreateDone
+	if cancel != nil {
+		cancel()
 	}
-	s.coCreateActive = false
+	s.coCreateMu.Unlock()
+
+	if done == nil {
+		return
+	}
+	timer := time.NewTimer(coCreateShutdownWait)
+	defer timer.Stop()
+	select {
+	case <-done:
+		s.coCreateMu.Lock()
+		if s.coCreateDone == done {
+			s.coCreateActive = false
+			s.coCreateCancel = nil
+		}
+		s.coCreateMu.Unlock()
+	case <-timer.C:
+		// The core owns the stream and may not observe cancellation immediately.
+		// The closed/generation guard prevents any late callback from reaching the hub.
+	}
 }
 
 func (s *server) handleWebCommand(text, provider, model string) error {

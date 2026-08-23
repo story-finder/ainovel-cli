@@ -55,6 +55,12 @@ type modelRuntimeFake struct {
 	models    map[string][]string
 	current   map[string]modelSelectionFake
 
+	selectionEntered   chan struct{}
+	selectionRelease   chan struct{}
+	selectionEnterOnce sync.Once
+	switchEntered      chan struct{}
+	switchEnterOnce    sync.Once
+
 	switchedRole     string
 	switchedProvider string
 	switchedModel    string
@@ -63,13 +69,16 @@ type modelRuntimeFake struct {
 
 type coCreateRuntimeFake struct {
 	*fakeRuntime
-	entered     chan struct{}
-	release     chan struct{}
-	enterOnce   sync.Once
-	history     []host.CoCreateMessage
-	progress    []struct{ kind, text string }
-	reply       host.CoCreateReply
-	streamError error
+	entered       chan struct{}
+	release       chan struct{}
+	enterOnce     sync.Once
+	history       []host.CoCreateMessage
+	progress      []struct{ kind, text string }
+	reply         host.CoCreateReply
+	streamError   error
+	finished      chan struct{}
+	finishOnce    sync.Once
+	ignoreContext bool
 }
 
 func newCoCreateRuntimeFake() *coCreateRuntimeFake {
@@ -87,6 +96,12 @@ func newCoCreateRuntimeFake() *coCreateRuntimeFake {
 }
 
 func (f *coCreateRuntimeFake) CoCreateStream(ctx context.Context, history []host.CoCreateMessage, onProgress func(string, string)) (host.CoCreateReply, error) {
+	defer func() {
+		if f.finished != nil {
+			f.finishOnce.Do(func() { close(f.finished) })
+		}
+	}()
+
 	f.mu.Lock()
 	f.history = append([]host.CoCreateMessage(nil), history...)
 	progress := append([]struct{ kind, text string }(nil), f.progress...)
@@ -97,10 +112,14 @@ func (f *coCreateRuntimeFake) CoCreateStream(ctx context.Context, history []host
 		f.enterOnce.Do(func() { close(f.entered) })
 	}
 	if f.release != nil {
-		select {
-		case <-f.release:
-		case <-ctx.Done():
-			return host.CoCreateReply{}, ctx.Err()
+		if f.ignoreContext {
+			<-f.release
+		} else {
+			select {
+			case <-f.release:
+			case <-ctx.Done():
+				return host.CoCreateReply{}, ctx.Err()
+			}
 		}
 	}
 	for _, item := range progress {
@@ -134,6 +153,12 @@ func (f *modelRuntimeFake) ConfiguredModels(provider string) []string {
 }
 
 func (f *modelRuntimeFake) CurrentModelSelection(role string) (string, string, bool) {
+	if f.selectionEntered != nil {
+		f.selectionEnterOnce.Do(func() { close(f.selectionEntered) })
+	}
+	if f.selectionRelease != nil {
+		<-f.selectionRelease
+	}
 	selection, ok := f.current[role]
 	if !ok && role != "default" {
 		selection, ok = f.current["default"]
@@ -147,6 +172,9 @@ func (f *modelRuntimeFake) CurrentModelSelection(role string) (string, string, b
 func (f *modelRuntimeFake) SwitchModel(role, provider, model string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.switchEntered != nil {
+		f.switchEnterOnce.Do(func() { close(f.switchEntered) })
+	}
 	f.switchedRole = role
 	f.switchedProvider = provider
 	f.switchedModel = model
@@ -352,6 +380,69 @@ func TestModelsRejectInvalidRole(t *testing.T) {
 	assertRecorderJSONError(t, response, http.StatusBadRequest, "vai trò")
 }
 
+func TestModelsSortConfiguredModels(t *testing.T) {
+	rt := newFakeRuntimeWithCommandCapabilities()
+	rt.models["openrouter"] = []string{"z-model", "a-model"}
+	app := newServer(rt, 8)
+	t.Cleanup(app.Close)
+
+	response := serveAppJSON(t, app, http.MethodGet, "/models", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /models status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var body modelCatalogResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode model catalog: %v", err)
+	}
+	for _, provider := range body.Providers {
+		if provider.Provider == "openrouter" {
+			if !reflect.DeepEqual(provider.Models, []string{"a-model", "z-model"}) {
+				t.Fatalf("openrouter models = %#v, want sorted copy", provider.Models)
+			}
+			return
+		}
+	}
+	t.Fatal("openrouter provider missing from model catalog")
+}
+
+func TestModelsSerializeCapabilitySnapshotWithCommand(t *testing.T) {
+	rt := newFakeRuntimeWithCommandCapabilities()
+	rt.selectionEntered = make(chan struct{})
+	rt.selectionRelease = make(chan struct{})
+	rt.switchEntered = make(chan struct{})
+	app := newServer(rt, 8)
+	t.Cleanup(app.Close)
+
+	modelsDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		modelsDone <- serveAppJSON(t, app, http.MethodGet, "/models", nil)
+	}()
+	select {
+	case <-rt.selectionEntered:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for model snapshot")
+	}
+
+	commandDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		commandDone <- serveAppJSON(t, app, http.MethodPost, "/commands", map[string]any{
+			"action": "command", "text": "/model writer",
+			"provider": "openrouter", "model": "google/gemini-2.5-pro",
+		})
+	}()
+	select {
+	case <-rt.switchEntered:
+		t.Fatal("/model switched while /models snapshot was in progress")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(rt.selectionRelease)
+	assertRecorderJSONOK(t, <-commandDone, http.StatusOK)
+	if response := <-modelsDone; response.Code != http.StatusOK {
+		t.Fatalf("GET /models status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+}
+
 func TestCommandModelUsesSelectedProviderAndModel(t *testing.T) {
 	rt := newFakeRuntimeWithCommandCapabilities()
 	app := newServer(rt, 8)
@@ -542,6 +633,48 @@ func TestStartCoCreateRejectsConcurrentSession(t *testing.T) {
 	})
 	assertRecorderJSONError(t, second, http.StatusConflict, "đang")
 	close(rt.release)
+}
+
+func TestCloseWaitsForColdCoCreateAndSuppressesStaleResult(t *testing.T) {
+	rt := newCoCreateRuntimeFake()
+	rt.finished = make(chan struct{})
+	app := newServer(rt, 8)
+	t.Cleanup(app.Close)
+
+	response := serveAppJSON(t, app, http.MethodPost, "/commands", map[string]any{
+		"action": "start", "mode": "cocreate", "text": "Truyện cần hủy",
+	})
+	assertRecorderJSONOK(t, response, http.StatusAccepted)
+	select {
+	case <-rt.entered:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for cold co-create to start")
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		app.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("server close did not join cold co-create")
+	}
+	select {
+	case <-rt.finished:
+	case <-time.After(time.Second):
+		t.Fatal("cold co-create did not exit after cancellation")
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	subscription := app.hub.subscribe(0)
+	defer subscription.Cancel()
+	for _, next := range subscription.Replay {
+		if next.Event == "command_progress" || next.Event == "command_result" {
+			t.Fatalf("stale co-create event after close: %s %s", next.Event, next.Data)
+		}
+	}
 }
 
 func TestQuestionsRootReturnsJSONNotFound(t *testing.T) {

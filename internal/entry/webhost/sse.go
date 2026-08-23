@@ -25,7 +25,7 @@ func (s *server) startPump() {
 
 func (s *server) Close() {
 	s.closeOnce.Do(func() {
-		s.cancelColdCoCreate()
+		s.shutdownColdCoCreate()
 		s.pumpCancel()
 		<-s.pumpDone
 	})
