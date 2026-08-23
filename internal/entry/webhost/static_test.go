@@ -55,6 +55,8 @@ func TestMarkdownAssetContainsSanitizedRenderer(t *testing.T) {
 		"MAX_BLOCKQUOTE_DEPTH",
 		"MAX_INLINE_DEPTH",
 		"MAX_INLINE_SCAN",
+		"MAX_CODE_SPAN_SCAN",
+		"MAX_CODE_SPAN_MARKER",
 		"function isHorizontalRule",
 		"function renderTable",
 		"render: renderMarkdown",

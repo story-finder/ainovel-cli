@@ -1,6 +1,7 @@
 // Run with: node --test internal/entry/webhost/web/markdown.test.js
 
 const assert = require("node:assert/strict");
+const { performance } = require("node:perf_hooks");
 const { test } = require("node:test");
 
 const { render, renderMarkdown } = require("./markdown.js");
@@ -106,4 +107,14 @@ test("falls back safely when link bracket scans exceed the inline limit", () => 
 
   assert.doesNotMatch(html, /<a href=/);
   assert.ok(html.includes(source));
+});
+
+test("bounds unmatched code span scans", { timeout: 3000 }, () => {
+  const source = `x${"`".repeat(40000)}`;
+  const started = performance.now();
+  const html = renderMarkdown(source);
+  const elapsed = performance.now() - started;
+
+  assert.ok(elapsed < 1000, `render took ${elapsed.toFixed(1)}ms`);
+  assert.equal(html, `<p>${source}</p>`);
 });

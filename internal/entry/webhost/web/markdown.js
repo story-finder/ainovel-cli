@@ -17,6 +17,8 @@
   const MAX_BLOCKQUOTE_DEPTH = 64;
   const MAX_INLINE_DEPTH = 64;
   const MAX_INLINE_SCAN = 2048;
+  const MAX_CODE_SPAN_SCAN = 2048;
+  const MAX_CODE_SPAN_MARKER = 16;
 
   function escapeHTML(value) {
     return String(value).replace(/[&<>"']/g, (character) => HTML_ESCAPES[character]);
@@ -127,15 +129,37 @@
     };
   }
 
-  function renderCodeSpan(value, start) {
-    let length = 1;
-    while (value[start + length] === "`") {
-      length += 1;
+  function findCodeSpanEnd(value, marker, start) {
+    const limit = Math.min(value.length - marker.length, start + MAX_CODE_SPAN_SCAN);
+    for (let index = start; index <= limit; index += 1) {
+      if (value.startsWith(marker, index)) {
+        return index;
+      }
     }
+    return -1;
+  }
+
+  function renderCodeSpan(value, start) {
+    let runEnd = start + 1;
+    while (value[runEnd] === "`") {
+      runEnd += 1;
+    }
+    const length = runEnd - start;
+    if (length > MAX_CODE_SPAN_MARKER) {
+      return {
+        html: escapeHTML(value.slice(start, runEnd)),
+        end: runEnd,
+      };
+    }
+
     const marker = "`".repeat(length);
-    const end = value.indexOf(marker, start + length);
+    const end = findCodeSpanEnd(value, marker, runEnd);
     if (end < 0) {
-      return null;
+      const fallbackEnd = Math.min(value.length, start + MAX_CODE_SPAN_SCAN);
+      return {
+        html: escapeHTML(value.slice(start, fallbackEnd)),
+        end: fallbackEnd,
+      };
     }
 
     let code = value.slice(start + length, end).replace(/\n/g, " ");
@@ -178,11 +202,9 @@
       }
       if (character === "`") {
         const code = renderCodeSpan(input, index);
-        if (code) {
-          html += code.html;
-          index = code.end - 1;
-          continue;
-        }
+        html += code.html;
+        index = code.end - 1;
+        continue;
       }
       if (character === "[") {
         const link = parseLink(input, index, depth);
