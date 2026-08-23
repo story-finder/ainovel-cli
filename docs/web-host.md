@@ -2,8 +2,8 @@
 
 This is the Release 1 operator guide for the standalone web host. It keeps one
 `ainovel-web-host` process serving the browser controls and event stream over a
-fixed LAN/VPN port. The legacy TUI must not run against the same workspace at
-the same time.
+fixed LAN/VPN host port. The legacy TUI must not run against the same workspace
+at the same time.
 
 ## Start the host
 
@@ -15,13 +15,13 @@ mkdir -p config workspace
 docker compose up --build
 ```
 
-Open the browser at `http://<LAN-IP>:8080`. Replace `<LAN-IP>` with the Docker
+Open the browser at `http://<LAN-IP>:8888`. Replace `<LAN-IP>` with the Docker
 host's address reachable from the LAN or VPN.
 
 To inspect the live event stream directly:
 
 ```bash
-curl -N http://<LAN-IP>:8080/events
+curl -N http://<LAN-IP>:8888/events
 ```
 
 The `/status` endpoint is a lightweight health check and does not require
@@ -29,12 +29,13 @@ The `/status` endpoint is a lightweight health check and does not require
 
 ## LAN/VPN reverse proxy
 
-Forward the web host's HTTP routes to the fixed container-published port. Keep
-SSE buffering disabled with this exact Nginx location:
+Forward the web host's HTTP routes to host port `8888`, which publishes the
+container's port `8080`. Keep SSE buffering disabled with this exact Nginx
+location:
 
 ```nginx
 location /events {
-    proxy_pass http://192.168.5.107:8080/events;
+    proxy_pass http://192.168.5.107:8888/events;
     proxy_buffering off;
     proxy_cache off;
     proxy_read_timeout 1h;
@@ -46,7 +47,7 @@ reverse proxy, with `/events` handled by the block above.
 
 ## Operator checklist
 
-1. Docker publishes host port 8080 to container port 8080.
+1. Docker publishes host port 8888 to container port 8080.
 2. GET /status returns 200 without api_key or base_url.
 3. GET /events has Content-Type text/event-stream and X-Accel-Buffering no.
 4. Browser controls work through an Nginx LAN/VPN reverse proxy.
