@@ -292,7 +292,7 @@
     onEvent("command_result", (payload) => { addCommandResult(payload); refreshStatus(); });
     onEvent("terminal", (payload) => { finishAssistant(); renderStatus({ host: payload }); refreshStatus(); });
     onEvent("question", (payload) => renderQuestionFrame(payload));
-    onEvent("reset", () => refreshStatus());
+    onEvent("reset", () => { finishAssistant(); refreshStatus(); });
     onEvent("runtime_replay", replayRuntime);
     eventSource.addEventListener("heartbeat", rememberEventID);
     eventSource.addEventListener("runtime_replay", rememberEventID);
@@ -316,6 +316,10 @@
     }
     const snapshot = get(payload, "host", "Host") || payload || {};
     state.status = snapshot;
+    const coCreate = get(payload, "cocreate", "CoCreate");
+    if (coCreate && typeof coCreate === "object") {
+      state.coCreateActive = Boolean(get(coCreate, "active", "Active")) || Boolean(get(coCreate, "inFlight", "InFlight"));
+    }
     const runtimeState = String(get(snapshot, "runtimeState", "RuntimeState") || "").toLowerCase();
     state.started = Boolean(get(snapshot, "isRunning", "IsRunning")) || ["running", "writing", "reviewing", "rewriting", "polishing"].includes(runtimeState);
     const runtime = runtimeLabel(runtimeState);
@@ -422,9 +426,9 @@
     elements.composerInput.focus();
   }
 
-  async function openModelPanel() {
+  async function openModelPanel(role) {
     elements.modelPanel.hidden = false;
-    await loadModels(elements.roleSelector.value || "default");
+    await loadModels(role || elements.roleSelector.value || "default");
   }
 
   async function loadModels(role) {
@@ -464,6 +468,7 @@
   }
 
   async function postCommand(command, extra = {}) {
+    if (command.trim().toLowerCase() === "/cocreate") state.coCreateActive = true;
     addUserMessage(command);
     try { await requestJSON("/commands", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "command", text: command, ...extra }) }); setError(""); return true; }
     catch (error) { setError(formatError(error, "Không thể thực hiện lệnh.")); return false; }
@@ -493,15 +498,23 @@
     elements.composerInput.value = "";
     elements.commandPalette.hidden = true;
     if (value.startsWith("/")) {
-      if (value.toLowerCase().startsWith("/model")) { elements.composerInput.value = `${value.slice(6).trim() ? value : "/model "}`; await openModelPanel(); return; }
+      const modelCommand = value.match(/^\/model(?:\s|$)/);
+      if (modelCommand) {
+        const role = value.slice(modelCommand[0].length).trim().split(/\s+/)[0] || "default";
+        elements.composerInput.value = role === "default" ? "/model " : `/model ${role}`;
+        await openModelPanel(role);
+        return;
+      }
       await postCommand(value); return;
     }
     addUserMessage(value);
     const action = freeTextAction();
     const body = { action, text: value };
     if (action === "start") body.mode = elements.startupMode.value || "quick";
+    const startingCoCreate = action === "start" && body.mode === "cocreate";
+    if (startingCoCreate) state.coCreateActive = true;
     try { await requestJSON("/commands", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); setError(""); }
-    catch (error) { setError(formatError(error, "Không thể gửi yêu cầu.")); }
+    catch (error) { if (startingCoCreate) state.coCreateActive = false; setError(formatError(error, "Không thể gửi yêu cầu.")); }
   }
 
   function clearQuestionFrame() {

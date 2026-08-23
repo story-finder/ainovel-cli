@@ -143,8 +143,15 @@ type commandRequest struct {
 }
 
 type statusResponse struct {
-	Host    host.UISnapshot `json:"host"`
-	Pending *questionFrame  `json:"pending"`
+	Host     host.UISnapshot `json:"host"`
+	Pending  *questionFrame  `json:"pending"`
+	CoCreate coCreateStatus  `json:"cocreate"`
+}
+
+type coCreateStatus struct {
+	Active   bool `json:"active"`
+	Stage    bool `json:"stage"`
+	InFlight bool `json:"inFlight"`
 }
 
 func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -153,9 +160,20 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, statusResponse{
-		Host:    s.rt.Snapshot(),
-		Pending: s.broker.pendingFrame(),
+		Host:     s.rt.Snapshot(),
+		Pending:  s.broker.pendingFrame(),
+		CoCreate: s.coCreateStatusSnapshot(),
 	})
+}
+
+func (s *server) coCreateStatusSnapshot() coCreateStatus {
+	s.coCreateMu.Lock()
+	defer s.coCreateMu.Unlock()
+	return coCreateStatus{
+		Active:   s.coCreateSession != nil || s.coCreateActive || s.coCreateInFlight,
+		Stage:    s.coCreateStage,
+		InFlight: s.coCreateInFlight,
+	}
 }
 
 func (s *server) handleModels(w http.ResponseWriter, r *http.Request) {
@@ -236,7 +254,7 @@ func (s *server) handleCommands(w http.ResponseWriter, r *http.Request) {
 		return
 	case "cocreate_message", "chat":
 		if text == "" {
-			writeError(w, http.StatusBadRequest, "text is required")
+			writeError(w, http.StatusBadRequest, "văn bản không được để trống")
 			return
 		}
 		accepted, err := s.startCoCreateMessage(text)
@@ -271,7 +289,7 @@ func (s *server) handleCommands(w http.ResponseWriter, r *http.Request) {
 		}
 		if mode == "cocreate" {
 			if s.rt.Snapshot().RecoveryLabel != "" {
-				writeError(w, http.StatusConflict, "workspace has saved progress; use resume")
+				writeError(w, http.StatusConflict, "không gian làm việc có tiến độ đã được lưu; hãy dùng tiếp tục khôi phục")
 				return
 			}
 			if text == "" {
@@ -297,7 +315,7 @@ func (s *server) handleCommands(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if s.rt.Snapshot().RecoveryLabel != "" {
-			writeError(w, http.StatusConflict, "workspace has saved progress; use resume")
+			writeError(w, http.StatusConflict, "không gian làm việc có tiến độ đã được lưu; hãy dùng tiếp tục khôi phục")
 			return
 		}
 		plan, err := startup.PrepareQuick(startup.Request{
@@ -320,20 +338,20 @@ func (s *server) handleCommands(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if strings.TrimSpace(label) == "" {
-			writeError(w, http.StatusConflict, "no saved workspace to resume")
+			writeError(w, http.StatusConflict, "không có không gian làm việc đã lưu để tiếp tục khôi phục")
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "label": label})
 		return
 	case "steer", "rewrite":
 		if text == "" {
-			writeError(w, http.StatusBadRequest, "text is required")
+			writeError(w, http.StatusBadRequest, "văn bản không được để trống")
 			return
 		}
 		s.rt.Steer(text)
 	case "continue":
 		if text == "" {
-			writeError(w, http.StatusBadRequest, "text is required")
+			writeError(w, http.StatusBadRequest, "văn bản không được để trống")
 			return
 		}
 		if s.coCreateStageActive() {
@@ -350,11 +368,11 @@ func (s *server) handleCommands(w http.ResponseWriter, r *http.Request) {
 		}
 	case "pause":
 		if !s.rt.Abort() {
-			writeError(w, http.StatusConflict, "host is not running")
+			writeError(w, http.StatusConflict, "lượt sáng tác hiện không chạy")
 			return
 		}
 	default:
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown action %q", request.Action))
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("thao tác không xác định %q", request.Action))
 		return
 	}
 

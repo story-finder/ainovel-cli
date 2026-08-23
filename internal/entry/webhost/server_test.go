@@ -459,6 +459,36 @@ func TestStatusReturnsExistingHostSnapshot(t *testing.T) {
 	}
 }
 
+func TestStatusIncludesStableCoCreateState(t *testing.T) {
+	rt := newFakeRuntime()
+	app := newServer(rt, 8)
+	t.Cleanup(app.Close)
+
+	app.coCreateMu.Lock()
+	app.coCreateActive = true
+	app.coCreateStage = true
+	app.coCreateInFlight = true
+	app.coCreateMu.Unlock()
+
+	response := serveAppJSON(t, app, http.MethodGet, "/status", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /status status = %d, want %d", response.Code, http.StatusOK)
+	}
+	var body struct {
+		CoCreate struct {
+			Active   bool `json:"active"`
+			Stage    bool `json:"stage"`
+			InFlight bool `json:"inFlight"`
+		} `json:"cocreate"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if body.CoCreate.Active != true || body.CoCreate.Stage != true || body.CoCreate.InFlight != true {
+		t.Fatalf("co-create status = %#v, want active/stage/inFlight true", body.CoCreate)
+	}
+}
+
 func TestWebAppRuntimeStatusOverridesBackendLabelForTerminalStates(t *testing.T) {
 	_, filename, _, ok := goruntime.Caller(0)
 	if !ok {
@@ -484,6 +514,83 @@ func TestWebAppRuntimeStatusOverridesBackendLabelForTerminalStates(t *testing.T)
 		if !strings.Contains(renderStatus, expected) {
 			t.Fatalf("renderStatus missing terminal runtime precedence: %s", expected)
 		}
+	}
+}
+
+func TestWebAppResetsStreamingBeforeRefreshingStatus(t *testing.T) {
+	content := embeddedAppJS(t)
+	start := strings.Index(content, `onEvent("reset"`)
+	if start < 0 {
+		t.Fatal("web/app.js does not register reset events")
+	}
+	end := strings.Index(content[start:], "});")
+	if end < 0 {
+		t.Fatal("could not isolate reset event handler")
+	}
+	handler := content[start : start+end]
+	if !strings.Contains(handler, "finishAssistant();") || !strings.Contains(handler, "refreshStatus();") || strings.Index(handler, "finishAssistant();") > strings.Index(handler, "refreshStatus();") {
+		t.Fatalf("reset handler must finish assistant before refresh: %s", handler)
+	}
+}
+
+func TestWebAppHydratesAndReservesCoCreateState(t *testing.T) {
+	content := embeddedAppJS(t)
+	for _, want := range []string{
+		`const coCreate = get(payload, "cocreate", "CoCreate");`,
+		`state.coCreateActive = Boolean(get(coCreate, "active", "Active")) || Boolean(get(coCreate, "inFlight", "InFlight"));`,
+		`const startingCoCreate = action === "start" && body.mode === "cocreate";`,
+		`if (startingCoCreate) state.coCreateActive = true;`,
+		`if (command.trim().toLowerCase() === "/cocreate") state.coCreateActive = true;`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("web/app.js missing co-create state assertion %q", want)
+		}
+	}
+}
+
+func TestWebAppOpensModelPickerOnlyForExactCommand(t *testing.T) {
+	content := embeddedAppJS(t)
+	for _, want := range []string{
+		`const modelCommand = value.match(/^\/model(?:\s|$)/);`,
+		`const role = value.slice(modelCommand[0].length).trim().split(/\s+/)[0] || "default";`,
+		`await openModelPanel(role);`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("web/app.js missing exact /model handling %q", want)
+		}
+	}
+	if strings.Contains(content, `value.toLowerCase().startsWith("/model")`) {
+		t.Fatal("web/app.js still opens model picker for /modelish")
+	}
+}
+
+func TestLifecycleErrorsAreVietnamese(t *testing.T) {
+	tests := []struct {
+		name       string
+		configure  func(*fakeRuntime)
+		action     string
+		text       string
+		mode       string
+		wantStatus int
+		want       string
+	}{
+		{name: "saved progress", configure: func(rt *fakeRuntime) { rt.snapshot.RecoveryLabel = "chương 3" }, action: "start", text: "ý tưởng", mode: "quick", wantStatus: http.StatusConflict, want: "tiến độ đã được lưu"},
+		{name: "missing workspace", action: "resume", wantStatus: http.StatusConflict, want: "không có không gian làm việc đã lưu"},
+		{name: "required text", action: "steer", wantStatus: http.StatusBadRequest, want: "văn bản không được để trống"},
+		{name: "not running", action: "pause", wantStatus: http.StatusConflict, want: "lượt sáng tác hiện không chạy"},
+		{name: "unknown action", action: "not-a-real-action", wantStatus: http.StatusBadRequest, want: "thao tác không xác định"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rt := newFakeRuntime()
+			if tt.configure != nil {
+				tt.configure(rt)
+			}
+			app := newServer(rt, 8)
+			t.Cleanup(app.Close)
+			response := serveAppJSON(t, app, http.MethodPost, "/commands", commandRequest{Action: tt.action, Text: tt.text, Mode: tt.mode})
+			assertRecorderJSONError(t, response, tt.wantStatus, tt.want)
+		})
 	}
 }
 
