@@ -17,6 +17,8 @@ Công cụ CLI sáng tác tiểu thuyết dài kỳ hoàn toàn tự động b�
 3. [Yêu cầu hệ thống](#yêu-cầu-hệ-thống)
 4. [Cài đặt nhanh](#cài-đặt-nhanh)
    - [Docker (khuyến nghị)](#docker-khuyến-nghị)
+     - [Web host bằng Docker](#web-host-bằng-docker)
+       - [Hộp chat web và lệnh](#hộp-chat-web-và-lệnh)
    - [Build từ source](#build-từ-source)
 5. [Cấu hình](#cấu-hình)
    - [Ollama (local, miễn phí)](#ollama-local-miễn-phí)
@@ -94,6 +96,10 @@ Công cụ CLI sáng tác tiểu thuyết dài kỳ hoàn toàn tự động b�
 
 ### Docker (khuyến nghị)
 
+#### Web host bằng Docker
+
+Web host là cách khởi chạy được khuyến nghị khi muốn điều khiển AI Novel bằng trình duyệt.
+
 **Bước 1** — Tải source và chuẩn bị thư mục:
 
 ```bash
@@ -102,49 +108,78 @@ cd ainovel-cli
 mkdir config workspace
 ```
 
-**Bước 2** — Build Docker image:
+**Bước 2** — Tạo file cấu hình `config/config.json` (xem [phần Cấu hình bên dưới](#cấu-hình)).
+
+**Bước 3** — Build và khởi động web host:
 
 ```bash
-docker build -t ainovel-cli-vi .
+docker compose up --build
 ```
 
-> Lần đầu mất 2–5 phút do tải Go dependencies. Các lần sau dùng cache, rất nhanh.
+Lệnh này build image và chạy một tiến trình `ainovel-web-host`. Tiến trình trong container lắng nghe tại cổng `8080`; Docker ánh xạ cổng đó ra cổng `8888` trên máy host.
 
-**Bước 3** — Tạo file cấu hình `config/config.json` (xem [phần Cấu hình bên dưới](#cấu-hình)).
+Mở trình duyệt tại:
 
-**Bước 4** — Chạy TUI:
+- Cùng máy chạy Docker: `http://localhost:8888`
+- Máy khác trong LAN/VPN: `http://<LAN-IP>:8888`
+
+Sau khi trang web mở, nhập yêu cầu truyện để bắt đầu viết. Có thể giữ cửa sổ terminal mở để xem log của container.
+
+##### Hộp chat web và lệnh
+
+Giao diện web là một hộp chat tiếng Việt: nhập yêu cầu hoặc can thiệp vào **ô nhập**, rồi nhấn **Gửi**. Dùng **bộ chọn chế độ** để chuyển giữa **Bắt đầu nhanh** và **Đồng sáng tác**. Phản hồi từ server được stream trực tiếp vào cuộc trò chuyện, hiển thị Markdown; bảng trạng thái hiển thị tiến độ, giai đoạn, model và các chi tiết LLM khi backend có dữ liệu.
+
+Gõ `/` trong ô nhập để chọn một lệnh. Web hỗ trợ đúng các lệnh slash của TUI sau:
+
+| Lệnh | Mô tả |
+|---|---|
+| `/model [vai-trò]` | Chuyển model — mở bảng chọn. Ví dụ `/model writer` chuyển riêng model Người viết |
+| `/diag` | Báo cáo chẩn đoán: phát hiện vòng lặp, chương bỏ sót, phục bút trì trệ, v.v. |
+| `/export` | Xuất truyện ra TXT; có thể truyền thêm đường dẫn EPUB như trong TUI |
+| `/import <đường-dẫn>` | Nhập tiểu thuyết có sẵn để tiếp tục viết |
+| `/simulate` | Tạo hồ sơ phong cách viết từ văn mẫu trong thư mục `simulate/` |
+| `/cocreate` | Tạm dừng sáng tác, đồng sáng tác lên kế hoạch giai đoạn tiếp theo |
+
+**Kiểm tra trạng thái** — mở terminal khác:
 
 ```bash
-# Linux / macOS
-docker run --rm -it \
-  -v "$PWD/config:/root/.ainovel" \
-  -v "$PWD/workspace:/workspace" \
-  -e TERM=xterm-256color \
-  ainovel-cli-vi
-
-# Windows (PowerShell)
-docker run --rm -it `
-  -v "${PWD}\config:/root/.ainovel" `
-  -v "${PWD}\workspace:/workspace" `
-  -e TERM=xterm-256color `
-  ainovel-cli-vi
-
-# Windows (Command Prompt)
-docker run --rm -it -v "%CD%\config:/root/.ainovel" -v "%CD%\workspace:/workspace" -e TERM=xterm-256color ainovel-cli-vi
+curl -s http://localhost:8888/status
 ```
 
-> **Windows Terminal**: Mở tab mới tự động —
-> ```powershell
-> Start-Process "wt.exe" -ArgumentList "new-tab", "cmd", "/k", 'docker run --rm -it -v "%CD%\config:/root/.ainovel" -v "%CD%\workspace:/workspace" -e TERM=xterm-256color ainovel-cli-vi'
-> ```
-
-**Chế độ không giao diện** (headless, chạy trên server):
+**Xem trực tiếp luồng sự kiện SSE** (tuỳ chọn):
 
 ```bash
-docker run --rm \
-  -v "$PWD/config:/root/.ainovel" \
-  -v "$PWD/workspace:/workspace" \
-  ainovel-cli-vi \
+curl -N http://localhost:8888/events
+```
+
+**Dừng web host** — nhấn `Ctrl+C` tại terminal đang chạy Compose, hoặc dùng:
+
+```bash
+docker compose down
+```
+
+Xem thêm checklist vận hành, kết nối LAN/VPN và cấu hình Nginx trong [tài liệu web host](docs/web-host.md).
+
+#### Chạy TUI cũ (tuỳ chọn)
+
+Dừng web host trước, sau đó chạy:
+
+```bash
+docker compose stop
+docker compose run --rm --entrypoint ainovel-cli ainovel \
+  --config /root/.ainovel/config.json
+```
+
+> Không chạy TUI đồng thời với web host trên cùng một thư mục `workspace`.
+
+#### Chạy không giao diện (headless)
+
+Phù hợp khi chạy trên server không cần trình duyệt:
+
+```bash
+docker compose stop
+docker compose run --rm --entrypoint ainovel-cli ainovel \
+  --config /root/.ainovel/config.json \
   --headless --prompt "Viết tiểu thuyết cung đấu, nhân vật chính là cô lao công xuất thân thấp kém"
 ```
 
@@ -275,7 +310,8 @@ Dùng model mạnh cho Kiến trúc sư (lập đề cương), model nhanh cho N
 ## Bắt đầu viết
 
 1. Khởi động app (xem [phần Cài đặt](#cài-đặt-nhanh))
-2. Giao diện TUI hiện ra — nhập yêu cầu tiểu thuyết vào ô bên dưới và nhấn **Enter**
+2. Nếu dùng **web host**, mở `http://localhost:8888`. Giao diện là một hộp chat tiếng Việt: nhập yêu cầu vào ô nhập rồi nhấn **Gửi**; dùng bộ chọn chế độ để chọn **Bắt đầu nhanh** hoặc **Đồng sáng tác**.
+3. Nếu dùng **TUI**, nhập yêu cầu tiểu thuyết vào ô bên dưới và nhấn **Enter**
 
 **Ví dụ yêu cầu ngắn** (hệ thống tự bổ sung thêm chi tiết):
 ```
@@ -485,7 +521,7 @@ Remove-Item -Recurse -Force workspace\output\
 **Giải pháp**: Rebuild Docker image sau khi pull phiên bản mới nhất:
 ```bash
 git pull
-docker build -t ainovel-cli-vi . --no-cache
+docker compose build --no-cache
 ```
 
 ---
