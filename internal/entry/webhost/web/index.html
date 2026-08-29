@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10131a">
+  <title>AI Novel · Không gian đồng sáng tác</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="page-header">
+      <div>
+        <p class="eyebrow">AI Novel</p>
+        <h1>Không gian đồng sáng tác</h1>
+        <p class="lede">Viết, theo dõi và điều phối câu chuyện trong một cuộc trò chuyện.</p>
+      </div>
+      <div class="connection-badge" aria-label="Trạng thái kết nối">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span>Máy chủ cục bộ</span>
+      </div>
+    </header>
+
+    <section id="status-strip" class="status-strip" aria-live="polite" aria-label="Thanh trạng thái">
+      <div class="status-primary">
+        <span class="status-label">Trạng thái</span>
+        <strong id="status-text">Đang kết nối…</strong>
+      </div>
+      <div class="status-summary">
+        <div class="status-item">
+          <span>Giai đoạn</span>
+          <strong id="status-phase">Chưa có dữ liệu</strong>
+        </div>
+        <div class="status-item">
+          <span>Luồng</span>
+          <strong id="status-thread">Chưa có dữ liệu</strong>
+        </div>
+        <div class="status-item">
+          <span>Mô hình</span>
+          <strong id="status-model">Chưa có dữ liệu</strong>
+        </div>
+        <div class="status-item status-progress-summary">
+          <span>Tiến độ chương</span>
+          <strong id="status-progress">Chưa có dữ liệu</strong>
+        </div>
+      </div>
+      <button id="status-details-toggle" class="text-button" type="button" aria-controls="status-details" aria-expanded="false">Xem chi tiết</button>
+    </section>
+
+    <section id="status-details" class="status-details" aria-label="Chi tiết trạng thái" hidden>
+      <div class="status-group">
+        <h2>Tổng quan</h2>
+        <dl class="detail-list">
+          <div><dt>Tên truyện</dt><dd id="status-novel">Chưa có dữ liệu</dd></div>
+          <div><dt>Nhà cung cấp</dt><dd id="status-provider">Chưa có dữ liệu</dd></div>
+          <div><dt>Mô hình</dt><dd id="status-model-detail">Chưa có dữ liệu</dd></div>
+          <div><dt>Phong cách</dt><dd id="status-style">Chưa có dữ liệu</dd></div>
+          <div><dt>Kết nối</dt><dd id="status-connection">Đang kiểm tra</dd></div>
+        </dl>
+      </div>
+      <div class="status-group">
+        <h2>Thông tin truyện</h2>
+        <dl class="detail-list">
+          <div><dt>Cung hiện tại</dt><dd id="status-volume-arc">Chưa có dữ liệu</dd></div>
+          <div><dt>Tập tiếp theo</dt><dd id="status-next-volume">Chưa có dữ liệu</dd></div>
+          <div><dt>Truyện phân lớp</dt><dd id="status-layered">Chưa có dữ liệu</dd></div>
+          <div><dt>Chương đang viết</dt><dd id="status-in-progress">Chưa có dữ liệu</dd></div>
+          <div><dt>Đề cương</dt><dd id="status-outline">Chưa có dữ liệu</dd></div>
+          <div><dt>Sự kiện chính đề cương</dt><dd id="status-outline-core">Chưa có dữ liệu</dd></div>
+          <div><dt>Nhân vật</dt><dd id="status-characters">Chưa có dữ liệu</dd></div>
+          <div><dt>Tiền đề</dt><dd id="status-premise">Chưa có dữ liệu</dd></div>
+          <div><dt>Nhân vật phụ</dt><dd id="status-supporting">Chưa có dữ liệu</dd></div>
+          <div><dt>La bàn câu chuyện</dt><dd id="status-compass">Chưa có dữ liệu</dd></div>
+          <div><dt>Tóm tắt gần đây</dt><dd id="status-summaries">Chưa có dữ liệu</dd></div>
+          <div><dt>Checkpoint gần nhất</dt><dd id="status-checkpoint">Chưa có dữ liệu</dd></div>
+          <div><dt>Commit gần nhất</dt><dd id="status-last-commit">Chưa có dữ liệu</dd></div>
+          <div><dt>Review gần nhất</dt><dd id="status-last-review">Chưa có dữ liệu</dd></div>
+        </dl>
+      </div>
+      <div class="status-group">
+        <h2>Nhân vật đang chạy</h2>
+        <dl class="detail-list">
+          <div><dt>Tác vụ hiện tại</dt><dd id="status-agent">Chưa có dữ liệu</dd></div>
+          <div><dt>Công cụ</dt><dd id="status-tool">Chưa có dữ liệu</dd></div>
+          <div><dt>Ngữ cảnh agent</dt><dd id="status-agent-context">Chưa có dữ liệu</dd></div>
+          <div><dt>Chương</dt><dd id="status-chapter">Chưa có dữ liệu</dd></div>
+        </dl>
+      </div>
+      <div class="status-group">
+        <h2>Ngữ cảnh</h2>
+        <dl class="detail-list">
+          <div><dt>Cửa sổ ngữ cảnh</dt><dd id="status-context">Chưa có dữ liệu</dd></div>
+          <div><dt>Đã sử dụng</dt><dd id="status-context-used">Chưa có dữ liệu</dd></div>
+          <div><dt>Phạm vi</dt><dd id="status-context-scope">Chưa có dữ liệu</dd></div>
+          <div><dt>Chiến lược</dt><dd id="status-context-strategy">Chưa có dữ liệu</dd></div>
+          <div><dt>Tin nhắn đang dùng</dt><dd id="status-context-active">Chưa có dữ liệu</dd></div>
+          <div><dt>Đã tóm tắt</dt><dd id="status-context-summary">Chưa có dữ liệu</dd></div>
+          <div><dt>Đã nén</dt><dd id="status-context-compacted">Chưa có dữ liệu</dd></div>
+          <div><dt>Đã giữ lại</dt><dd id="status-context-kept">Chưa có dữ liệu</dd></div>
+          <div><dt>Phong cách viết</dt><dd id="status-writing-style">Chưa có dữ liệu</dd></div>
+        </dl>
+      </div>
+      <div class="status-group">
+        <h2>Sử dụng</h2>
+        <dl class="detail-list">
+          <div><dt>Token</dt><dd id="status-usage">Chưa có dữ liệu</dd></div>
+          <div><dt>Chi phí</dt><dd id="status-cost">Chưa có dữ liệu</dd></div>
+          <div><dt>Ngân sách</dt><dd id="status-budget">Chưa có dữ liệu</dd></div>
+          <div><dt>Thiếu usage trợ lý</dt><dd id="status-missing-usage">Chưa có dữ liệu</dd></div>
+        </dl>
+      </div>
+      <div class="status-group">
+        <h2>Bộ nhớ đệm</h2>
+        <dl class="detail-list">
+          <div><dt>Trạng thái</dt><dd id="status-cache">Chưa có dữ liệu</dd></div>
+          <div><dt>Đọc từ bộ nhớ đệm</dt><dd id="status-cache-read">Chưa có dữ liệu</dd></div>
+          <div><dt>Ghi vào bộ nhớ đệm</dt><dd id="status-cache-write">Chưa có dữ liệu</dd></div>
+          <div><dt>Cửa sổ gần đây</dt><dd id="status-cache-recent">Chưa có dữ liệu</dd></div>
+          <div><dt>Cache theo vai trò</dt><dd id="status-cache-by-agent">Chưa có dữ liệu</dd></div>
+          <div><dt>Cache theo model</dt><dd id="status-cache-by-model">Chưa có dữ liệu</dd></div>
+        </dl>
+      </div>
+      <div class="status-group">
+        <h2>Viết lại</h2>
+        <dl class="detail-list">
+          <div><dt>Đang chờ</dt><dd id="status-rewrites">Chưa có dữ liệu</dd></div>
+          <div><dt>Lý do</dt><dd id="status-rewrite-reason">Chưa có dữ liệu</dd></div>
+          <div><dt>Khôi phục</dt><dd id="status-recovery">Chưa có dữ liệu</dd></div>
+        </dl>
+      </div>
+      <div class="status-group">
+        <h2>Can thiệp</h2>
+        <dl class="detail-list">
+          <div><dt>Trạng thái</dt><dd id="status-steer">Chưa có dữ liệu</dd></div>
+        </dl>
+      </div>
+      <div class="status-progress">
+        <div class="status-progress-heading">
+          <span>Tiến độ</span>
+          <strong id="progress-text">Chưa có dữ liệu</strong>
+        </div>
+        <div class="progress-track" aria-hidden="true">
+          <span id="progress-bar" class="progress-bar" style="width: 0%"></span>
+        </div>
+      </div>
+    </section>
+
+    <div class="workspace">
+      <aside id="model-panel" class="model-panel" aria-labelledby="model-panel-title" hidden>
+        <div class="panel-heading">
+          <div>
+            <p class="panel-kicker">Thiết lập</p>
+            <h2 id="model-panel-title">Chọn mô hình</h2>
+          </div>
+          <button id="model-panel-close" class="icon-button" type="button" aria-label="Đóng bảng chọn mô hình">×</button>
+        </div>
+        <form id="model-form" class="selector-stack">
+          <label for="role-selector">Vai trò
+            <select id="role-selector" name="role">
+              <option value="default">Mặc định</option>
+              <option value="coordinator">Điều phối viên</option>
+              <option value="architect">Kiến trúc sư</option>
+              <option value="writer">Người viết</option>
+              <option value="editor">Biên tập viên</option>
+            </select>
+          </label>
+          <label for="provider-selector">Nhà cung cấp
+            <select id="provider-selector" name="provider">
+              <option value="">Chưa chọn</option>
+            </select>
+          </label>
+          <label for="model-selector">Mô hình
+            <select id="model-selector" name="model">
+              <option value="">Chưa chọn</option>
+            </select>
+          </label>
+          <button type="submit">Áp dụng mô hình</button>
+        </form>
+        <p class="panel-hint">Các lựa chọn sẽ được cập nhật theo máy chủ.</p>
+      </aside>
+
+      <section id="chat" class="chat" aria-label="Cuộc trò chuyện">
+        <div id="transcript" class="transcript" role="log" aria-live="polite" aria-label="Nội dung cuộc trò chuyện">
+          <article class="message message-assistant">
+            <div class="message-meta">
+              <span>AI Novel</span>
+              <span>Trợ lý sáng tác</span>
+            </div>
+            <div class="message-content assistant-markdown">
+              <p>Sẵn sàng đồng hành cùng bạn. Hãy mô tả ý tưởng, nhân vật hoặc cảnh mở đầu để bắt đầu.</p>
+            </div>
+          </article>
+        </div>
+
+        <section id="question" class="question-panel" aria-live="polite" hidden>
+          <div class="panel-heading">
+            <div>
+              <p class="panel-kicker">Cần bạn lựa chọn</p>
+              <h2>Câu hỏi từ máy chủ</h2>
+            </div>
+          </div>
+          <form id="question-form">
+            <div id="question-items" class="question-items"></div>
+            <p id="question-error" class="inline-error" role="alert"></p>
+            <button type="submit">Gửi lựa chọn</button>
+          </form>
+        </section>
+
+        <p id="server-error" class="server-error" role="alert" aria-live="assertive"></p>
+
+        <div class="composer-wrap">
+          <section id="command-palette" class="command-palette" aria-label="Bảng lệnh" hidden>
+            <div class="palette-heading">
+              <span>Lệnh nhanh</span>
+              <span class="palette-hint">Chọn một lệnh</span>
+            </div>
+            <ol class="command-list">
+              <li class="command-entry">
+                <button type="button" data-command="/model [vai-trò]">
+                  <code>/model [vai-trò]</code>
+                  <span>Chuyển đổi mô hình mặc định hoặc theo vai trò</span>
+                </button>
+              </li>
+              <li class="command-entry">
+                <button type="button" data-command="/diag">
+                  <code>/diag</code>
+                  <span>Chẩn đoán tình trạng sáng tác tiểu thuyết</span>
+                </button>
+              </li>
+              <li class="command-entry">
+                <button type="button" data-command="/export">
+                  <code>/export</code>
+                  <span>Xuất truyện các chương đã hoàn thành sang TXT/EPUB</span>
+                </button>
+              </li>
+              <li class="command-entry">
+                <button type="button" data-command="/import &lt;đường-dẫn&gt;">
+                  <code>/import &lt;đường-dẫn&gt;</code>
+                  <span>Nhập truyện bên ngoài để tiếp tục viết</span>
+                </button>
+              </li>
+              <li class="command-entry">
+                <button type="button" data-command="/simulate">
+                  <code>/simulate</code>
+                  <span>Đọc ./simulate để tạo hoặc cập nhật tăng dần hồ sơ mô phỏng phong cách viết</span>
+                </button>
+              </li>
+              <li class="command-entry">
+                <button type="button" data-command="/cocreate">
+                  <code>/cocreate</code>
+                  <span>Tạm dừng sáng tác, đồng sáng tác lên kế hoạch cho các giai đoạn tiếp theo</span>
+                </button>
+              </li>
+            </ol>
+          </section>
+
+          <form id="start-form" class="composer-form">
+            <div class="composer-input-row">
+              <label class="sr-only" for="composer-input">Nội dung tin nhắn</label>
+              <textarea id="composer-input" name="text" rows="1" placeholder="Viết ý tưởng hoặc gõ / để xem lệnh…" autocomplete="off"></textarea>
+            </div>
+            <div class="composer-toolbar">
+              <div class="toolbar-group">
+                <button id="command-button" class="icon-button" type="button" aria-controls="command-palette" aria-expanded="false" aria-label="Mở bảng lệnh">/</button>
+                <label class="mode-selector" for="startup-mode">Chế độ
+                  <select id="startup-mode" name="mode">
+                    <option value="quick">Bắt đầu nhanh</option>
+                    <option value="cocreate">Đồng sáng tác</option>
+                  </select>
+                </label>
+              </div>
+              <div class="toolbar-group toolbar-actions">
+                <button id="pause-button" class="secondary" type="button" title="Dừng lượt sáng tác; tiến độ được lưu tự động" aria-label="Dừng lượt sáng tác; tiến độ được lưu tự động">Tạm dừng</button>
+                <button id="resume-button" class="secondary" type="button" hidden>Tiếp tục</button>
+                <button id="reconnect-button" class="secondary" type="button">Kết nối lại</button>
+                <button id="send-button" type="submit">Gửi</button>
+              </div>
+            </div>
+          </form>
+          <p class="composer-note">Enter để gửi · Shift + Enter để xuống dòng · Gõ / để mở lệnh</p>
+        </div>
+      </section>
+    </div>
+  </main>
+  <script src="/markdown.js" defer></script>
+  <script src="/app.js" defer></script>
+</body>
+</html>
