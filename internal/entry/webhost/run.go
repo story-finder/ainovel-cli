@@ -23,9 +23,23 @@ const (
 	shutdownTimeout = 5 * time.Second
 )
 
+// Options cấu hình khởi động cho webhost.Run: ngoài đường dẫn cấu hình và địa chỉ lắng nghe,
+// còn mang thao tác bootstrap (start/resume/continue) và chỉ thị kèm theo.
 type Options struct {
-	ConfigPath string
-	Addr       string
+	ConfigPath       string
+	Addr             string
+	StartupOperation string
+	Instruction      string
+}
+
+// SupportedStartupOperations trả về tập thao tác khởi động mà webhost hỗ trợ, dùng để
+// xác thực AINOVEL_STARTUP_OPERATION trước khi gọi webhost.Run.
+func SupportedStartupOperations() map[string]struct{} {
+	return map[string]struct{}{
+		"start":    {},
+		"resume":   {},
+		"continue": {},
+	}
 }
 
 // ValidateAddress validates a TCP listen address without resolving DNS names.
@@ -104,7 +118,40 @@ func Run(ctx context.Context, options Options) error {
 	if err != nil {
 		return fmt.Errorf("create host: %w", err)
 	}
+	if err := startHostedOperation(runtime, options); err != nil {
+		runtime.Close()
+		return fmt.Errorf("start hosted operation: %w", err)
+	}
 	return serve(ctx, runtime, options.Addr)
+}
+
+// startHostedOperation thực thi thao tác bootstrap đã chọn trên runtime ngay sau khi host.New
+// hoàn tất và trước khi serve lắng nghe HTTP. Thao tác không hợp lệ bị từ chối ngay tại đây
+// để tránh chạm vào tệp cấu hình hoặc gọi runtime với chỉ thị trống.
+func startHostedOperation(rt runtime, options Options) error {
+	switch options.StartupOperation {
+	case "start":
+		if strings.TrimSpace(options.Instruction) == "" {
+			return errors.New("startup instruction is required for start operation")
+		}
+		return rt.StartPrepared(host.BuildStartPrompt(options.Instruction))
+	case "resume":
+		label, err := rt.Resume()
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(label) == "" {
+			return errors.New("resume returned empty recovery label")
+		}
+		return nil
+	case "continue":
+		if strings.TrimSpace(options.Instruction) == "" {
+			return errors.New("startup instruction is required for continue operation")
+		}
+		return rt.Continue(options.Instruction)
+	default:
+		return fmt.Errorf("unsupported startup operation %q", options.StartupOperation)
+	}
 }
 
 func serve(ctx context.Context, runtime runtime, addr string) error {

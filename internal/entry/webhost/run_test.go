@@ -5,9 +5,12 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/voocel/ainovel-cli/internal/host"
 )
 
 type trackingRuntime struct {
@@ -52,6 +55,143 @@ func TestRunRejectsInvalidAddressBeforeLoadingConfig(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "load config") {
 		t.Fatalf("Run invalid address error = %q, want validation before config loading", err)
+	}
+}
+
+func TestStartHostedOperationContinueUsesExactInstruction(t *testing.T) {
+	rt := newFakeRuntime()
+	err := startHostedOperation(rt, Options{
+		StartupOperation: "continue",
+		Instruction:      "Đổi góc nhìn sang nhân vật An.",
+	})
+	if err != nil {
+		t.Fatalf("startHostedOperation continue: %v", err)
+	}
+	want := []string{"Đổi góc nhìn sang nhân vật An."}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if !reflect.DeepEqual(rt.continueTexts, want) {
+		t.Fatalf("Continue calls = %v, want %v", rt.continueTexts, want)
+	}
+	if !reflect.DeepEqual(rt.calls, []string{"continue"}) {
+		t.Fatalf("calls = %v, want [continue]", rt.calls)
+	}
+}
+
+func TestStartHostedOperationStartRequiresInstructionAndCallsStartPrepared(t *testing.T) {
+	t.Run("missing instruction is rejected", func(t *testing.T) {
+		rt := newFakeRuntime()
+		err := startHostedOperation(rt, Options{StartupOperation: "start"})
+		if err == nil {
+			t.Fatal("startHostedOperation start without instruction: err = nil, want validation error")
+		}
+		rt.mu.Lock()
+		defer rt.mu.Unlock()
+		if len(rt.calls) != 0 {
+			t.Fatalf("calls = %v, want no runtime calls", rt.calls)
+		}
+	})
+
+	t.Run("whitespace instruction is rejected", func(t *testing.T) {
+		rt := newFakeRuntime()
+		err := startHostedOperation(rt, Options{StartupOperation: "start", Instruction: "   "})
+		if err == nil {
+			t.Fatal("startHostedOperation start with whitespace instruction: err = nil, want validation error")
+		}
+	})
+
+	t.Run("instruction is wrapped by BuildStartPrompt", func(t *testing.T) {
+		rt := newFakeRuntime()
+		err := startHostedOperation(rt, Options{
+			StartupOperation: "start",
+			Instruction:      "Viết truyện về một hành trình xuyên Việt.",
+		})
+		if err != nil {
+			t.Fatalf("startHostedOperation start: %v", err)
+		}
+		want := []string{host.BuildStartPrompt("Viết truyện về một hành trình xuyên Việt.")}
+		rt.mu.Lock()
+		defer rt.mu.Unlock()
+		if !reflect.DeepEqual(rt.startPrompts, want) {
+			t.Fatalf("StartPrepared prompts = %v, want %v", rt.startPrompts, want)
+		}
+	})
+}
+
+func TestStartHostedOperationResumeFailsOnBlankLabel(t *testing.T) {
+	t.Run("blank label is rejected", func(t *testing.T) {
+		rt := newFakeRuntime()
+		rt.resumeLabel = "   "
+		err := startHostedOperation(rt, Options{StartupOperation: "resume"})
+		if err == nil {
+			t.Fatal("startHostedOperation resume with blank label: err = nil, want validation error")
+		}
+		if !strings.Contains(err.Error(), "empty recovery label") {
+			t.Fatalf("resume error = %q, want empty recovery label", err)
+		}
+		rt.mu.Lock()
+		defer rt.mu.Unlock()
+		if !reflect.DeepEqual(rt.calls, []string{"resume"}) {
+			t.Fatalf("calls = %v, want [resume]", rt.calls)
+		}
+	})
+
+	t.Run("non-blank label succeeds", func(t *testing.T) {
+		rt := newFakeRuntime()
+		rt.resumeLabel = "chương 5"
+		err := startHostedOperation(rt, Options{StartupOperation: "resume"})
+		if err != nil {
+			t.Fatalf("startHostedOperation resume with valid label: %v", err)
+		}
+	})
+
+	t.Run("resume error is propagated", func(t *testing.T) {
+		rt := newFakeRuntime()
+		resumeErr := errors.New("không tìm thấy tiến độ")
+		rt.resumeErr = resumeErr
+		err := startHostedOperation(rt, Options{StartupOperation: "resume"})
+		if !errors.Is(err, resumeErr) {
+			t.Fatalf("resume error = %v, want %v", err, resumeErr)
+		}
+	})
+}
+
+func TestStartHostedOperationContinueRequiresInstruction(t *testing.T) {
+	t.Run("missing instruction is rejected", func(t *testing.T) {
+		rt := newFakeRuntime()
+		err := startHostedOperation(rt, Options{StartupOperation: "continue"})
+		if err == nil {
+			t.Fatal("startHostedOperation continue without instruction: err = nil, want validation error")
+		}
+		rt.mu.Lock()
+		defer rt.mu.Unlock()
+		if len(rt.calls) != 0 {
+			t.Fatalf("calls = %v, want no runtime calls", rt.calls)
+		}
+	})
+
+	t.Run("whitespace instruction is rejected", func(t *testing.T) {
+		rt := newFakeRuntime()
+		err := startHostedOperation(rt, Options{StartupOperation: "continue", Instruction: "\t\n"})
+		if err == nil {
+			t.Fatal("startHostedOperation continue with whitespace instruction: err = nil, want validation error")
+		}
+	})
+}
+
+func TestStartHostedOperationRejectsUnsupportedOperationBeforeConfigLoading(t *testing.T) {
+	rt := newFakeRuntime()
+	err := startHostedOperation(rt, Options{StartupOperation: "rewind", Instruction: "anything"})
+	if err == nil {
+		t.Fatal("startHostedOperation unsupported op: err = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "unsupported startup operation") {
+		t.Fatalf("error = %q, want unsupported startup operation", err)
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if len(rt.calls) != 0 {
+		t.Fatalf("calls = %v, want no runtime calls", rt.calls)
 	}
 }
 
