@@ -13,7 +13,11 @@ import (
 	"github.com/voocel/ainovel-cli/internal/entry/webhost"
 )
 
-const defaultAddr = "0.0.0.0:8080"
+const (
+	defaultAddr         = "0.0.0.0:8080"
+	envStartupOperation = "AINOVEL_STARTUP_OPERATION"
+	envInstruction      = "AINOVEL_INSTRUCTION"
+)
 
 func main() {
 	options, err := parseOptions(os.Args[1:])
@@ -30,6 +34,9 @@ func main() {
 	}
 }
 
+// parseOptions đọc cờ dòng lệnh cùng các biến môi trường AINOVEL_STARTUP_OPERATION và
+// AINOVEL_INSTRUCTION, đồng thời xác thực thao tác khởi động có thuộc tập hỗ trợ hay không
+// trước khi gọi webhost.Run. Chỉ thị và thao tác đều được trim trắng; thao tác bắt buộc phải có.
 func parseOptions(args []string) (webhost.Options, error) {
 	flags := flag.NewFlagSet("ainovel-web-host", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -47,5 +54,19 @@ func parseOptions(args []string) (webhost.Options, error) {
 	if err := webhost.ValidateAddress(*addr); err != nil {
 		return webhost.Options{}, err
 	}
-	return webhost.Options{ConfigPath: *configPath, Addr: *addr}, nil
+
+	operation := strings.TrimSpace(os.Getenv(envStartupOperation))
+	if operation == "" {
+		return webhost.Options{}, fmt.Errorf("%s is required", envStartupOperation)
+	}
+	if _, ok := webhost.SupportedStartupOperations()[operation]; !ok {
+		return webhost.Options{}, fmt.Errorf("unsupported startup operation %q", operation)
+	}
+
+	return webhost.Options{
+		ConfigPath:       *configPath,
+		Addr:             *addr,
+		StartupOperation: operation,
+		Instruction:      strings.TrimSpace(os.Getenv(envInstruction)),
+	}, nil
 }
